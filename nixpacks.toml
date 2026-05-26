@@ -1,8 +1,5 @@
 [phases.setup]
-nixPkgs = ["php84", "php84Extensions.pdo_mysql", "php84Extensions.pdo", "php84Extensions.mysqlnd"]
-
-[phases.install]
-cmds = ["php -m"]
+nixPkgs = ["php84", "php84Extensions.mysqli", "php84Extensions.pdo_mysql"]
 
 [start]
 cmd = "php -S 0.0.0.0:$PORT"

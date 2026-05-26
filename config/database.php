@@ -20,11 +20,8 @@ class Database {
         $this->conn = null;
 
         try {
-
-            $dsn = "mysql:host={$this->host};port={$this->port};dbname={$this->db_name}";
-
             $this->conn = new PDO(
-                $dsn,
+                "mysql:host={$this->host};port={$this->port};dbname={$this->db_name}",
                 $this->username,
                 $this->password
             );
@@ -32,9 +29,7 @@ class Database {
             $this->conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
         } catch(PDOException $exception) {
-
-            die("Connection error: " . $exception->getMessage());
-
+            echo "Connection error: " . $exception->getMessage();
         }
 
         return $this->conn;
