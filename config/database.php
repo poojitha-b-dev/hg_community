@@ -1,32 +1,38 @@
 <?php
 
-$host = getenv("MYSQLHOST");
-$user = getenv("MYSQLUSER");
-$pass = getenv("MYSQLPASSWORD");
-$db   = getenv("MYSQLDATABASE");
-$port = getenv("MYSQLPORT");
-
 class Database {
-    public $connection;
+    private $host;
+    private $db_name;
+    private $username;
+    private $password;
+    private $port;
+    public $conn;
+
+    public function __construct() {
+        $this->host = getenv("MYSQLHOST");
+        $this->db_name = getenv("MYSQLDATABASE");
+        $this->username = getenv("MYSQLUSER");
+        $this->password = getenv("MYSQLPASSWORD");
+        $this->port = getenv("MYSQLPORT");
+    }
 
     public function getConnection() {
+        $this->conn = null;
 
-        global $host, $user, $pass, $db, $port;
+        try {
+            $this->conn = new PDO(
+                "mysql:host={$this->host};port={$this->port};dbname={$this->db_name}",
+                $this->username,
+                $this->password
+            );
 
-        $this->connection = new mysqli(
-            $host,
-            $user,
-            $pass,
-            $db,
-            $port
-        );
+            $this->conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
-        if ($this->connection->connect_error) {
-            die("Connection failed: " . $this->connection->connect_error);
+        } catch(PDOException $exception) {
+            echo "Connection error: " . $exception->getMessage();
         }
 
-        return $this->connection;
+        return $this->conn;
     }
 }
-
 ?>
