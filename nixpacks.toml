@@ -1,5 +1,5 @@
-[variables]
-NIXPACKS_PKGS = "php phpExtensions.pdo_mysql"
+[phases.setup]
+nixPkgs = ["php", "php83Extensions.pdo_mysql", "php83Extensions.pdo", "php83Extensions.mysqli"]
 
 [start]
 cmd = "php -S 0.0.0.0:$PORT"

@@ -69,7 +69,7 @@ HG Community is a lightweight Discord-inspired community platform built for Hack
 
 # Project Structure
 
-```txt
+```
 hg_community
 ├─ api
 │  ├─ auth.php
@@ -98,17 +98,27 @@ hg_community
 │  └─ test-connection.php
 ├─ includes
 │  └─ auth.php
-├─ uploads
-│  ├─ avatars
-│  │  └─ .gitkeep
-│  ├─ dm
-│  │  └─ .gitkeep
-│  └─ 1779802249_MYPIC1.jpg
 ├─ index.php
 ├─ login.php
+├─ nixpacks.toml
+├─ pages
+│  ├─ About.jsx
+│  ├─ ChangePassword.jsx
+│  ├─ Dashboard.jsx
+│  ├─ ForgotPassword.jsx
+│  ├─ Login.jsx
+│  ├─ Register.jsx
+│  ├─ ResetPassword.jsx
+│  ├─ Search.jsx
+│  ├─ Upload.jsx
+│  └─ VerifyEmail.jsx
 ├─ README.md
 ├─ register.php
-└─ .gitignore
+└─ uploads
+   ├─ 1779802249_MYPIC1.jpg
+   ├─ avatars
+   └─ dm
+
 ```
 
 ---
@@ -209,3 +219,4 @@ dev-tools/test-connection.php
 B.Poojitha
 
 # https://github.com/poojitha-b-dev/
+
