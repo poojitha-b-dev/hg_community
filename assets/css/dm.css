@@ -1,0 +1,372 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   HG Community — dm.css
+   All styles for the Direct Messaging system.
+   Loaded by index.php alongside main.css — no existing styles are changed.
+════════════════════════════════════════════════════════════════════════════ */
+
+/* ── DM modal sizing ─────────────────────────────────────────────────────── */
+.dm-modal-content {
+    max-width: 620px;
+    width: 100%;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    height: 78vh;
+    max-height: 680px;
+    overflow: hidden;
+}
+
+/* ── DM header bar ───────────────────────────────────────────────────────── */
+.dm-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 18px;
+    border-bottom: 1px solid #3f4147;
+    background: #232428;
+    border-radius: 8px 8px 0 0;
+    flex-shrink: 0;
+}
+
+.dm-back-btn {
+    background: none;
+    border: none;
+    color: #949ba4;
+    cursor: pointer;
+    font-size: .82rem;
+    padding: 5px 10px;
+    border-radius: 5px;
+    transition: background .15s, color .15s;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.dm-back-btn:hover { background: #383a40; color: #fff; }
+
+.dm-recipient-info {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    flex: 1;
+    overflow: hidden;
+}
+
+.dm-recipient-info img {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+    border: 2px solid #5865f2;
+}
+
+.dm-recipient-name {
+    font-weight: 600;
+    font-size: .95rem;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ── Scrollable message area ─────────────────────────────────────────────── */
+.dm-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    background: #313338;
+}
+
+.dm-messages::-webkit-scrollbar { width: 5px; }
+.dm-messages::-webkit-scrollbar-track { background: transparent; }
+.dm-messages::-webkit-scrollbar-thumb { background: #4f545c; border-radius: 3px; }
+
+.dm-empty {
+    text-align: center;
+    color: #6d6f78;
+    padding: 48px 20px;
+    font-size: .9rem;
+    line-height: 1.6;
+    margin: auto;
+}
+
+/* ── Individual DM message bubble ────────────────────────────────────────── */
+.dm-msg {
+    display: flex;
+    align-items: flex-end;
+    gap: 7px;
+    max-width: 78%;
+    position: relative;
+}
+
+.dm-msg.dm-sent     { align-self: flex-end;   flex-direction: row-reverse; }
+.dm-msg.dm-received { align-self: flex-start; }
+
+.dm-msg-avatar {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+    margin-bottom: 2px;
+}
+
+.dm-msg-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.dm-msg-bubble {
+    padding: 8px 13px;
+    border-radius: 14px;
+    font-size: .88rem;
+    line-height: 1.45;
+    word-break: break-word;
+    position: relative;
+}
+
+.dm-sent     .dm-msg-bubble { background: #5865f2; color: #fff;     border-bottom-right-radius: 4px; }
+.dm-received .dm-msg-bubble { background: #3b3d44; color: #dcddde;  border-bottom-left-radius: 4px;  }
+
+.dm-msg.dm-deleted .dm-msg-bubble {
+    background: transparent;
+    border: 1px dashed #4f545c;
+    color: #6d6f78;
+    font-style: italic;
+}
+
+.dm-msg-time {
+    font-size: .68rem;
+    color: #72767d;
+    padding: 0 3px;
+}
+.dm-sent .dm-msg-time     { text-align: right; }
+.dm-received .dm-msg-time { text-align: left;  }
+
+/* Delete button shown on hover ──────────────────────────────────────────── */
+.dm-msg-delete-btn {
+    position: absolute;
+    top: -7px;
+    right: -7px;
+    background: #ed4245;
+    color: #fff;
+    border: none;
+    border-radius: 50%;
+    width: 18px;
+    height: 18px;
+    font-size: .6rem;
+    cursor: pointer;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    line-height: 1;
+    font-weight: 700;
+}
+.dm-msg:hover .dm-msg-delete-btn { display: flex; }
+
+/* File attachments inside DM ────────────────────────────────────────────── */
+.dm-msg-file { margin-top: 5px; }
+.dm-msg-file img   { max-width: 200px; border-radius: 8px; cursor: pointer; display: block; }
+.dm-msg-file video,
+.dm-msg-file audio { max-width: 200px; display: block; margin-top: 4px; }
+.dm-msg-file a     { color: #89b4f8; font-size: .85rem; }
+
+/* ── DM input area ───────────────────────────────────────────────────────── */
+.dm-input-area {
+    padding: 12px 16px;
+    border-top: 1px solid #3f4147;
+    background: #232428;
+    border-radius: 0 0 8px 8px;
+    flex-shrink: 0;
+}
+
+.dm-file-preview {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    background: #2b2d31;
+    border-radius: 6px;
+    padding: 7px 10px;
+    margin-bottom: 8px;
+    font-size: .8rem;
+    color: #949ba4;
+}
+
+.remove-dm-file {
+    margin-left: auto;
+    background: none;
+    border: none;
+    color: #ed4245;
+    cursor: pointer;
+    font-size: .78rem;
+    padding: 0 4px;
+}
+.remove-dm-file:hover { text-decoration: underline; }
+
+.dm-input-row {
+    display: flex;
+    gap: 7px;
+    align-items: center;
+}
+
+.dm-input-row input[type="text"] {
+    flex: 1;
+    background: #383a40;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 14px;
+    color: #dcddde;
+    font-size: .88rem;
+    outline: none;
+    transition: background .15s;
+}
+.dm-input-row input[type="text"]:focus  { background: #404249; }
+.dm-input-row input[type="text"]::placeholder { color: #72767d; }
+
+.dm-file-btn,
+.dm-send-btn {
+    border: none;
+    border-radius: 8px;
+    padding: 10px 14px;
+    cursor: pointer;
+    font-size: .82rem;
+    font-weight: 600;
+    transition: background .15s, opacity .15s;
+    flex-shrink: 0;
+}
+
+.dm-file-btn { background: #383a40; color: #949ba4; }
+.dm-file-btn:hover { background: #404249; color: #fff; }
+
+.dm-send-btn { background: #5865f2; color: #fff; }
+.dm-send-btn:hover { background: #4752c4; }
+.dm-send-btn:active { opacity: .85; }
+
+/* ── DM conversations list (dm-list-modal) ───────────────────────────────── */
+.dm-conversations-list {
+    margin-top: 12px;
+    max-height: 420px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.dm-conv-item {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background .15s;
+}
+.dm-conv-item:hover { background: #35373c; }
+
+.dm-conv-avatar {
+    width: 40px;
+    height: 40px;
+    flex-shrink: 0;
+}
+.dm-conv-avatar img {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+.dm-conv-info { flex: 1; overflow: hidden; }
+
+.dm-conv-name {
+    font-weight: 600;
+    font-size: .88rem;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.dm-conv-last {
+    font-size: .78rem;
+    color: #72767d;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 2px;
+}
+
+.dm-conv-unread {
+    background: #ed4245;
+    color: #fff;
+    font-size: .66rem;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 10px;
+    min-width: 18px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.dm-conv-empty {
+    text-align: center;
+    color: #72767d;
+    padding: 32px 20px;
+    font-size: .87rem;
+    line-height: 1.6;
+}
+
+/* ── "DM" button shown on member-item hover ──────────────────────────────── */
+.member-item { position: relative; }
+
+.member-dm-btn {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: #5865f2;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 3px 9px;
+    font-size: .7rem;
+    font-weight: 700;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity .15s, background .15s;
+    letter-spacing: .3px;
+}
+.member-item:hover .member-dm-btn { opacity: 1; }
+.member-dm-btn:hover { background: #4752c4; }
+
+/* ── Sidebar badge on the "Messages" button ──────────────────────────────── */
+.dm-sidebar-badge {
+    display: inline-block;
+    background: #ed4245;
+    color: #fff;
+    font-size: .63rem;
+    font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 8px;
+    margin-left: 5px;
+    vertical-align: middle;
+    min-width: 16px;
+    text-align: center;
+    line-height: 1.4;
+}
+
+/* ── Mobile adjustments ──────────────────────────────────────────────────── */
+@media (max-width: 640px) {
+    .dm-modal-content {
+        max-width: 100%;
+        height: 100vh;
+        max-height: 100vh;
+        border-radius: 0;
+    }
+    .dm-header      { border-radius: 0; }
+    .dm-input-area  { border-radius: 0; }
+    .dm-msg         { max-width: 92%; }
+}
