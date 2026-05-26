@@ -1,5 +1,5 @@
-[phases.setup]
-aptPkgs = ["php-mysql"]
+[variables]
+NIXPACKS_PKGS = "php phpExtensions.pdo_mysql"
 
 [start]
 cmd = "php -S 0.0.0.0:$PORT"
