@@ -1,22 +1,24 @@
 <?php
 
-define('DB_HOST', 'mysql.railway.internal');
-define('DB_USER', 'root');
-define('DB_PASS', 'AcKPoMUIUVMbBEgdJCqfrJwYvBWjPfUX');
-define('DB_NAME', 'railway');
-define('DB_PORT', '3306');
+$host = getenv("MYSQLHOST");
+$user = getenv("MYSQLUSER");
+$pass = getenv("MYSQLPASSWORD");
+$db   = getenv("MYSQLDATABASE");
+$port = getenv("MYSQLPORT");
 
 class Database {
     public $connection;
 
     public function getConnection() {
 
+        global $host, $user, $pass, $db, $port;
+
         $this->connection = new mysqli(
-            DB_HOST,
-            DB_USER,
-            DB_PASS,
-            DB_NAME,
-            DB_PORT
+            $host,
+            $user,
+            $pass,
+            $db,
+            $port
         );
 
         if ($this->connection->connect_error) {
