@@ -14,10 +14,15 @@ class Database {
 
         try {
             $dsn = "mysql:host={$host};port={$port};dbname={$db_name};charset=utf8mb4";
-            $this->conn = new PDO($dsn, $username, $password);
-            $this->conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+            $this->conn = new PDO($dsn, $username, $password, [
+                PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                PDO::ATTR_TIMEOUT            => 10,
+            ]);
         } catch (PDOException $e) {
-            die("Connection error: " . $e->getMessage());
+            http_response_code(500);
+            header('Content-Type: application/json');
+            die(json_encode(['success' => false, 'message' => 'DB connection failed: ' . $e->getMessage()]));
         }
 
         return $this->conn;

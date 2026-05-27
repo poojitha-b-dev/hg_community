@@ -38,10 +38,14 @@ switch ($method) {
         $insertStmt->bindParam(':expires_at', $expiresAt);
         
         if ($insertStmt->execute()) {
-            // Build dynamic URL instead of hardcoding
-            $host = $_SERVER['HTTP_HOST']; // localhost, 127.0.0.1, or domain
-            $protocol = isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http";
-            $inviteUrl = $protocol . "://" . $host . "/hg_community/register.php?invite=" . $inviteCode;
+            $host     = $_SERVER['HTTP_HOST'];
+            // Railway terminates SSL at its proxy — check X-Forwarded-Proto
+            $protocol = (!empty($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https')
+                        || (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+                        ? 'https' : 'http';
+            // Build base path dynamically — works on localhost/subfolder AND Railway root
+            $scriptDir = rtrim(dirname(dirname($_SERVER['SCRIPT_NAME'])), '/');
+            $inviteUrl = $protocol . '://' . $host . $scriptDir . '/register.php?invite=' . $inviteCode;
 
 
             echo json_encode([

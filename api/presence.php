@@ -35,50 +35,34 @@ if ($method === 'POST') {
     exit;
 }
 
-// ── GET: SSE presence stream ───────────────────────────────────────────────────
+// ── GET: plain JSON poll (replaces SSE — works on Railway/proxies) ────────────
 if ($method === 'GET') {
-    header('Content-Type: text/event-stream');
-    header('Cache-Control: no-cache');
-    header('X-Accel-Buffering: no');
-    @ob_end_flush();
+    header('Content-Type: application/json');
 
-    $end = time() + 55;
+    // Touch current user's last_active
+    $touch = $db->prepare("UPDATE users SET last_active = NOW() WHERE id = :id");
+    $touch->execute([':id' => $_SESSION['user_id']]);
 
-    while (time() < $end) {
-        // Touch current user's last_active on every poll
-        $touch = $db->prepare("UPDATE users SET last_active = NOW() WHERE id = :id");
-        $touch->execute([':id' => $_SESSION['user_id']]);
+    // Fetch online users (active in last 2 minutes)
+    $stmt = $db->prepare(
+        "SELECT id, username, role, avatar, last_active
+         FROM users
+         WHERE last_active > DATE_SUB(NOW(), INTERVAL 2 MINUTE)
+           AND status != 'banned'
+         ORDER BY username ASC"
+    );
+    $stmt->execute();
+    $online = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // Fetch online users (active in last 2 minutes)
-        $stmt = $db->prepare(
-            "SELECT id, username, role, avatar, last_active
-             FROM users
-             WHERE last_active > DATE_SUB(NOW(), INTERVAL 2 MINUTE)
-               AND status != 'banned'
-             ORDER BY username ASC"
-        );
-        $stmt->execute();
-        $online = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-        // Clean up avatars (ensure path is usable on frontend)
-        foreach ($online as &$u) {
-            $u['avatar'] = $u['avatar'] ?: 'assets/images/default-avatar.png';
+    // Fix avatar paths
+    foreach ($online as &$u) {
+        if (empty($u['avatar']) || $u['avatar'] === 'default-avatar.png') {
+            $u['avatar'] = 'assets/images/default-avatar.png';
         }
-        unset($u);
-
-        $payload = json_encode(['online' => $online, 'count' => count($online)]);
-        echo "data: {$payload}\n\n";
-
-        if (ob_get_level() > 0) ob_flush();
-        flush();
-
-        if (connection_aborted()) break;
-        sleep(15);
     }
+    unset($u);
 
-    echo "event: done\ndata: {}\n\n";
-    if (ob_get_level() > 0) ob_flush();
-    flush();
+    echo json_encode(['success' => true, 'online' => $online, 'count' => count($online)]);
     exit;
 }
 

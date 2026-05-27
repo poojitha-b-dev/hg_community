@@ -59,66 +59,44 @@ if ($method === 'POST') {
     exit;
 }
 
-// ── GET: Server-Sent Events stream ────────────────────────────────────────────
+// ── GET: plain JSON poll (replaces SSE — works on Railway/proxies) ────────────
 if ($method === 'GET') {
+    header('Content-Type: application/json');
+
     $channelId = (int)($_GET['channel_id'] ?? 0);
     if (!$channelId) {
         http_response_code(400);
-        header('Content-Type: application/json');
         echo json_encode(['success' => false, 'message' => 'channel_id required']);
         exit;
     }
 
-    // SSE headers
-    header('Content-Type: text/event-stream');
-    header('Cache-Control: no-cache');
-    header('X-Accel-Buffering: no'); // Nginx: disable buffering
-    @ob_end_flush();
-
     $myId = (int)$_SESSION['user_id'];
 
-    // Stream for up to 55 seconds (below common 60 s proxy timeouts)
-    $end = time() + 55;
+    // Purge stale rows (> 5 seconds old)
+    $db->exec("DELETE FROM typing_indicators WHERE updated_at < DATE_SUB(NOW(), INTERVAL 5 SECOND)");
 
-    while (time() < $end) {
-        // Purge stale rows first (> 5 seconds old)
-        $db->exec("DELETE FROM typing_indicators WHERE updated_at < DATE_SUB(NOW(), INTERVAL 5 SECOND)");
+    // Fetch who is currently typing in this channel (excluding self)
+    $stmt = $db->prepare(
+        "SELECT u.username
+         FROM typing_indicators ti
+         JOIN users u ON ti.user_id = u.id
+         WHERE ti.channel_id = :cid AND ti.user_id != :uid"
+    );
+    $stmt->execute([':cid' => $channelId, ':uid' => $myId]);
+    $typingUsers = $stmt->fetchAll(PDO::FETCH_COLUMN);
 
-        // Fetch who is currently typing in this channel (excluding self)
-        $stmt = $db->prepare(
-            "SELECT u.username
-             FROM typing_indicators ti
-             JOIN users u ON ti.user_id = u.id
-             WHERE ti.channel_id = :cid AND ti.user_id != :uid"
-        );
-        $stmt->execute([':cid' => $channelId, ':uid' => $myId]);
-        $typingUsers = $stmt->fetchAll(PDO::FETCH_COLUMN);
-
-        // Build human-readable label
-        $label = '';
-        $count = count($typingUsers);
-        if ($count === 1) {
-            $label = $typingUsers[0] . ' is typing…';
-        } elseif ($count === 2) {
-            $label = $typingUsers[0] . ' and ' . $typingUsers[1] . ' are typing…';
-        } elseif ($count > 2) {
-            $label = 'Several people are typing…';
-        }
-
-        $payload = json_encode(['typing' => $typingUsers, 'label' => $label]);
-        echo "data: {$payload}\n\n";
-
-        if (ob_get_level() > 0) ob_flush();
-        flush();
-
-        if (connection_aborted()) break;
-        sleep(2);
+    // Build human-readable label
+    $label = '';
+    $count = count($typingUsers);
+    if ($count === 1) {
+        $label = $typingUsers[0] . ' is typing…';
+    } elseif ($count === 2) {
+        $label = $typingUsers[0] . ' and ' . $typingUsers[1] . ' are typing…';
+    } elseif ($count > 2) {
+        $label = 'Several people are typing…';
     }
 
-    // Send a final "done" event so the client can reconnect
-    echo "event: done\ndata: {}\n\n";
-    if (ob_get_level() > 0) ob_flush();
-    flush();
+    echo json_encode(['success' => true, 'typing' => $typingUsers, 'label' => $label]);
     exit;
 }
 

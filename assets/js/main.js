@@ -313,11 +313,15 @@ class CommunityApp {
         el.className    = 'message';
         el.dataset.messageId = message.id;
 
-        const timestamp  = new Date(message.created_at).toLocaleString();
+        // Railway DB returns UTC timestamps without 'Z' — append it so JS
+        // treats them as UTC and converts to the user's local timezone correctly.
+        const createdUtc  = message.created_at ? message.created_at.replace(' ', 'T') + 'Z' : '';
+        const editedUtc   = message.edited_at  ? message.edited_at.replace(' ', 'T')  + 'Z' : '';
+        const timestamp   = createdUtc ? new Date(createdUtc).toLocaleString() : '';
         const avatarSrc  = message.avatar || 'assets/images/default-avatar.png';
         const isDeleted  = !!message.is_deleted;
-        const editedLabel = message.edited_at
-            ? `<span class="edited-label" title="Edited on ${new Date(message.edited_at).toLocaleString()}">(edited)</span>`
+        const editedLabel = editedUtc
+            ? `<span class="edited-label" title="Edited on ${new Date(editedUtc).toLocaleString()}">(edited)</span>`
             : '';
         const pinnedLabel = message.is_pinned
             ? `<span class="pinned-label">📌 Pinned</span>`
@@ -1162,7 +1166,9 @@ class DMManager {
     }
 
     formatTime(dateStr) {
-        return new Date(dateStr).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        // DB returns UTC without 'Z' — append it for correct local conversion
+        const utc = dateStr ? dateStr.replace(' ', 'T') + 'Z' : '';
+        return utc ? new Date(utc).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
     }
 
     showModal(id)  { const m = document.getElementById(id); if (m) m.style.display = 'block'; }

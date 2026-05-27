@@ -35,7 +35,15 @@ switch ($method) {
         $stmt = $db->prepare($query);
         $stmt->execute();
         $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        
+
+        // Fix avatar paths — DB stores bare 'default-avatar.png' for old rows
+        foreach ($users as &$u) {
+            if (empty($u['avatar']) || $u['avatar'] === 'default-avatar.png') {
+                $u['avatar'] = 'assets/images/default-avatar.png';
+            }
+        }
+        unset($u);
+
         echo json_encode(['success' => true, 'users' => $users]);
         break;
         
