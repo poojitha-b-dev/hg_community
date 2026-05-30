@@ -38,14 +38,10 @@ switch ($method) {
         $insertStmt->bindParam(':expires_at', $expiresAt);
         
         if ($insertStmt->execute()) {
-            $host     = $_SERVER['HTTP_HOST'];
-            // Railway terminates SSL at its proxy — check X-Forwarded-Proto
-            $protocol = (!empty($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https')
-                        || (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
-                        ? 'https' : 'http';
-            // Build base path dynamically — works on localhost/subfolder AND Railway root
-            $scriptDir = rtrim(dirname(dirname($_SERVER['SCRIPT_NAME'])), '/');
-            $inviteUrl = $protocol . '://' . $host . $scriptDir . '/register.php?invite=' . $inviteCode;
+            // Build dynamic URL instead of hardcoding
+            $host = $_SERVER['HTTP_HOST']; // localhost, 127.0.0.1, or domain
+            $protocol = isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http";
+            $inviteUrl = $protocol . "://" . $host . "/hg_community/register.php?invite=" . $inviteCode;
 
 
             echo json_encode([
@@ -59,6 +55,23 @@ switch ($method) {
         }
         break;
         
+    case 'DELETE':
+        $data = json_decode(file_get_contents('php://input'), true);
+        $code = $data['invite_code'] ?? '';
+        if (!$code) {
+            echo json_encode(['success' => false, 'message' => 'invite_code required']);
+            exit;
+        }
+        // Only allow revoking unused, non-expired invites
+        $del = $db->prepare("DELETE FROM invites WHERE invite_code = :code AND used_at IS NULL");
+        $del->execute([':code' => $code]);
+        if ($del->rowCount() > 0) {
+            echo json_encode(['success' => true, 'message' => 'Invite revoked']);
+        } else {
+            echo json_encode(['success' => false, 'message' => 'Invite not found or already used']);
+        }
+        break;
+
     case 'GET':
         $query = "SELECT i.*, u.username as created_by_name, u2.username as used_by_name 
                  FROM invites i 

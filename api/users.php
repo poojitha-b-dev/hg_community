@@ -127,25 +127,27 @@ switch ($method) {
             $params = [':id' => $_SESSION['user_id']];
 
             if (!empty($data['username'])) {
-                // Check unique
+                $newUsername = trim($data['username']);
+                // Enforce format: a-z, 0-9, dot, underscore, 3-30 chars
+                if (!preg_match('/^[a-z0-9._]{3,30}$/', $newUsername)) {
+                    echo json_encode(['success' => false, 'message' => 'Username must be 3–30 characters and contain only a-z, 0-9, . or _']);
+                    exit;
+                }
+                // Check uniqueness
                 $chk = $db->prepare("SELECT id FROM users WHERE username = :u AND id != :id");
-                $chk->execute([':u' => $data['username'], ':id' => $_SESSION['user_id']]);
+                $chk->execute([':u' => $newUsername, ':id' => $_SESSION['user_id']]);
                 if ($chk->rowCount() > 0) {
                     echo json_encode(['success' => false, 'message' => 'Username already taken']);
                     exit;
                 }
                 $fields[] = 'username = :username';
-                $params[':username'] = $data['username'];
+                $params[':username'] = $newUsername;
             }
+
+            // Email is locked — cannot be changed after account creation
             if (!empty($data['email'])) {
-                $chk = $db->prepare("SELECT id FROM users WHERE email = :e AND id != :id");
-                $chk->execute([':e' => $data['email'], ':id' => $_SESSION['user_id']]);
-                if ($chk->rowCount() > 0) {
-                    echo json_encode(['success' => false, 'message' => 'Email already in use']);
-                    exit;
-                }
-                $fields[] = 'email = :email';
-                $params[':email'] = $data['email'];
+                echo json_encode(['success' => false, 'message' => 'Email cannot be changed after registration.']);
+                exit;
             }
             if (!empty($data['phone'])) {
                 $fields[] = 'phone = :phone';

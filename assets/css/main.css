@@ -155,9 +155,37 @@ body {
 .channel-item.active .unread-badge { display: none !important; }
 
 /* Controls */
+.admin-panel {
+    border-top: 1px solid #3f4147;
+}
+
+.admin-panel-toggle {
+    width: 100%;
+    padding: 10px 12px;
+    background: transparent;
+    color: #949ba4;
+    border: none;
+    border-bottom: 1px solid transparent;
+    font-size: .82rem;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    letter-spacing: .4px;
+    text-transform: uppercase;
+    transition: color .15s;
+}
+.admin-panel-toggle:hover { color: #dbdee1; }
+.admin-toggle-icon { font-size: .7rem; transition: transform .2s; }
+
+.admin-controls {
+    padding: 8px 12px 12px;
+    border-bottom: 1px solid #3f4147;
+}
+
 .admin-controls, .user-controls {
     padding: 12px;
-    border-top: 1px solid #3f4147;
 }
 
 .control-btn {

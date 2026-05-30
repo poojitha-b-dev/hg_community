@@ -93,6 +93,17 @@ class CommunityApp {
     }
 
     setupModalControls() {
+        // ── Admin panel collapse toggle ────────────────────────────────────────
+        const adminToggle   = document.getElementById('admin-panel-toggle');
+        const adminControls = document.getElementById('admin-controls');
+        if (adminToggle) {
+            adminToggle.addEventListener('click', () => {
+                const open = adminControls.style.display !== 'none';
+                adminControls.style.display = open ? 'none' : 'block';
+                adminToggle.querySelector('.admin-toggle-icon').textContent = open ? '▲' : '▼';
+            });
+        }
+
         // Create channel
         const createChannelBtn  = document.getElementById('create-channel-btn');
         const createChannelModal = document.getElementById('create-channel-modal');
@@ -119,6 +130,33 @@ class CommunityApp {
                 document.getElementById('team-name').required = false;
             }
         });
+
+        // Manage Channels
+        const manageChannelsBtn = document.getElementById('manage-channels-btn');
+        if (manageChannelsBtn) {
+            manageChannelsBtn.addEventListener('click', () => {
+                document.getElementById('manage-channels-modal').style.display = 'block';
+                this.loadAllChannels();
+            });
+        }
+        const channelSearch = document.getElementById('channel-search');
+        if (channelSearch) {
+            channelSearch.addEventListener('input', (e) => {
+                const term = e.target.value.toLowerCase();
+                document.querySelectorAll('#channels-table-body tr').forEach(row => {
+                    row.style.display = row.textContent.toLowerCase().includes(term) ? '' : 'none';
+                });
+            });
+        }
+
+        // Manage Invites
+        const manageInvitesBtn = document.getElementById('manage-invites-btn');
+        if (manageInvitesBtn) {
+            manageInvitesBtn.addEventListener('click', () => {
+                document.getElementById('manage-invites-modal').style.display = 'block';
+                this.loadAllInvites();
+            });
+        }
 
         // Create invite
         const createInviteBtn  = document.getElementById('create-invite-btn');
@@ -896,12 +934,15 @@ class CommunityApp {
     async saveSettings() {
         const data = {
             username:         document.getElementById('settings-username').value.trim(),
-            email:            document.getElementById('settings-email').value.trim(),
             phone:            document.getElementById('settings-phone').value.trim(),
             current_password: document.getElementById('settings-current-password').value,
             new_password:     document.getElementById('settings-new-password').value,
         };
-        Object.keys(data).forEach(k => { if (!data[k]) delete data[k]; });
+        // Also send bio if present
+        const bioEl = document.getElementById('settings-bio');
+        if (bioEl) data.bio = bioEl.value;
+
+        Object.keys(data).forEach(k => { if (data[k] === '' || data[k] === undefined) delete data[k]; });
 
         try {
             const response = await fetch('api/users.php', {
@@ -958,6 +999,139 @@ class CommunityApp {
         } catch (err) {
             console.error('Error loading users:', err);
         }
+    }
+
+    async loadAllChannels() {
+        try {
+            const res  = await fetch('api/channels.php');
+            const data = await res.json();
+            if (data.success) this.renderChannelsTable(data.channels);
+        } catch (err) { console.error('Error loading channels:', err); }
+    }
+
+    renderChannelsTable(channels) {
+        const tbody = document.getElementById('channels-table-body');
+        if (!tbody) return;
+        tbody.innerHTML = '';
+        if (!channels.length) {
+            tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:20px;color:#949ba4">No channels found.</td></tr>';
+            return;
+        }
+        const typeLabels = { announcement:'📢 Announcement', general:'💬 General', team:'👥 Team', technical:'💻 Technical' };
+        channels.forEach(ch => {
+            const row = document.createElement('tr');
+            row.style.borderBottom = '1px solid #3f4147';
+            row.innerHTML = `
+                <td style="padding:10px;color:#fff;font-weight:500">#${this.escapeHtml(ch.name)}</td>
+                <td style="padding:10px;color:#949ba4">${typeLabels[ch.type] || ch.type}</td>
+                <td style="padding:10px;color:#949ba4;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                    title="${this.escapeHtml(ch.description||'')}">${this.escapeHtml(ch.description||'—')}</td>
+                <td style="padding:10px;color:#949ba4;font-size:.8rem">${ch.created_at ? new Date(ch.created_at.replace(' ','T')+'Z').toLocaleDateString() : '—'}</td>
+                <td style="padding:10px">
+                    <div style="display:flex;gap:6px">
+                        <button onclick="app.openEditChannelFromTable(${ch.id})"
+                                style="border:none;padding:4px 10px;border-radius:4px;font-size:.78rem;cursor:pointer;background:#5865f2;color:#fff;font-weight:600">Edit</button>
+                        <button onclick="app.deleteChannelFromTable(${ch.id},'${this.escapeHtml(ch.name)}')"
+                                style="border:none;padding:4px 10px;border-radius:4px;font-size:.78rem;cursor:pointer;background:#ed4245;color:#fff;font-weight:600">Delete</button>
+                    </div>
+                </td>`;
+            tbody.appendChild(row);
+        });
+    }
+
+    openEditChannelFromTable(channelId) {
+        const ch = this.channels.find(c => c.id == channelId);
+        if (!ch) { this.showNotification('Channel not found — refresh the page', 'error'); return; }
+        document.getElementById('manage-channels-modal').style.display = 'none';
+        document.getElementById('edit-channel-id').value   = ch.id;
+        document.getElementById('edit-channel-name').value = ch.name;
+        document.getElementById('edit-channel-desc').value = ch.description || '';
+        document.getElementById('edit-channel-type').value = ch.type;
+        document.getElementById('edit-channel-modal').style.display = 'block';
+    }
+
+    async deleteChannelFromTable(channelId, channelName) {
+        if (!confirm(`Delete #${channelName}? All messages will be permanently removed.`)) return;
+        try {
+            const res  = await fetch('api/channels.php', {
+                method: 'DELETE', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ channel_id: channelId }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.showNotification('Channel deleted.', 'success');
+                await this.loadChannels();
+                this.loadAllChannels();
+                if (this.currentChannelId == channelId) {
+                    this.currentChannelId = null;
+                    document.getElementById('current-channel').textContent = 'Select a channel';
+                    document.querySelector('.message-input-container').style.display = 'none';
+                    document.getElementById('messages-container').innerHTML =
+                        '<div class="welcome-message"><h2>Welcome to HG Community! 👋</h2><p>Select a channel from the sidebar to start chatting.</p></div>';
+                }
+            } else {
+                this.showNotification('Error: ' + data.message, 'error');
+            }
+        } catch (err) { this.showNotification('Error deleting channel', 'error'); }
+    }
+
+    async loadAllInvites() {
+        try {
+            const res  = await fetch('api/invites.php');
+            const data = await res.json();
+            if (data.success) this.renderInvitesTable(data.invites);
+        } catch (err) { console.error('Error loading invites:', err); }
+    }
+
+    renderInvitesTable(invites) {
+        const tbody = document.getElementById('invites-table-body');
+        if (!tbody) return;
+        tbody.innerHTML = '';
+        if (!invites.length) {
+            tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:20px;color:#949ba4">No invites found.</td></tr>';
+            return;
+        }
+        invites.forEach(inv => {
+            const now       = new Date();
+            const expiresAt = inv.expires_at ? new Date(inv.expires_at.replace(' ','T')+'Z') : null;
+            const expired   = expiresAt && expiresAt < now;
+            const used      = !!inv.used_at;
+            const status    = used ? '<span style="color:#23a559">Used</span>'
+                            : expired ? '<span style="color:#ed4245">Expired</span>'
+                            : '<span style="color:#f0b232">Active</span>';
+            const typeLabel = inv.invite_type === 'group' ? '👥 Group' : '👤 Single';
+            const row = document.createElement('tr');
+            row.style.borderBottom = '1px solid #3f4147';
+            row.innerHTML = `
+                <td style="padding:10px;font-family:monospace;font-size:.78rem;color:#949ba4">${inv.invite_code.slice(0,12)}…</td>
+                <td style="padding:10px;color:#dcddde">${typeLabel}</td>
+                <td style="padding:10px"><span class="role-badge role-${inv.role}">${inv.role}</span></td>
+                <td style="padding:10px;color:#949ba4">${this.escapeHtml(inv.created_by_name||'—')}</td>
+                <td style="padding:10px;color:#949ba4;font-size:.8rem">${expiresAt ? expiresAt.toLocaleString() : '—'}</td>
+                <td style="padding:10px">${status}</td>
+                <td style="padding:10px">
+                    ${(!used && !expired) ? `<button onclick="app.revokeInvite('${inv.invite_code}')"
+                        style="border:none;padding:4px 10px;border-radius:4px;font-size:.78rem;cursor:pointer;background:#ed4245;color:#fff;font-weight:600">Revoke</button>` : '—'}
+                </td>`;
+            tbody.appendChild(row);
+        });
+    }
+
+    async revokeInvite(code) {
+        if (!confirm('Revoke this invite? It will no longer be usable.')) return;
+        try {
+            const res  = await fetch('api/invites.php', {
+                method: 'DELETE', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ invite_code: code }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.showNotification('Invite revoked.', 'success');
+                this.loadAllInvites();
+            } else {
+                this.showNotification('Error: ' + data.message, 'error');
+            }
+        } catch (err) { this.showNotification('Error revoking invite', 'error'); }
     }
 
     renderUsersTable(users) {

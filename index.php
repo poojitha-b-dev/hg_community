@@ -65,10 +65,18 @@ $user = $auth->getCurrentUser();
         </div>
 
         <?php if ($user['role'] === 'admin'): ?>
-        <div class="admin-controls">
-            <button id="create-channel-btn" class="control-btn">+ New Channel</button>
-            <button id="create-invite-btn"  class="control-btn">Create Invite</button>
-            <button id="manage-users-btn"   class="control-btn">Manage Users</button>
+        <div class="admin-panel">
+            <button class="admin-panel-toggle" id="admin-panel-toggle">
+                <span>Admin Panel</span>
+                <span class="admin-toggle-icon">▲</span>
+            </button>
+            <div class="admin-controls" id="admin-controls" style="display:none">
+                <button id="create-channel-btn"  class="control-btn">＋ New Channel</button>
+                <button id="manage-channels-btn" class="control-btn">📋 Manage Channels</button>
+                <button id="create-invite-btn"   class="control-btn">🔗 Create Invite</button>
+                <button id="manage-invites-btn"  class="control-btn">📨 Manage Invites</button>
+                <button id="manage-users-btn"    class="control-btn">👥 Manage Users</button>
+            </div>
         </div>
         <?php endif; ?>
 
@@ -280,7 +288,7 @@ $user = $auth->getCurrentUser();
 
         <div style="text-align:center;margin-bottom:20px">
             <img id="settings-avatar-preview"
-                 src="assets/images/<?php echo htmlspecialchars($user['avatar'] ?? 'default-avatar.png'); ?>"
+                 src="<?php $av=$user['avatar']??''; echo htmlspecialchars($av ?: 'assets/images/default-avatar.png'); ?>"
                  onerror="this.src='assets/images/default-avatar.png'"
                  style="width:80px;height:80px;border-radius:50%;object-fit:cover;border:3px solid #5865f2">
             <div style="margin-top:10px">
@@ -294,14 +302,15 @@ $user = $auth->getCurrentUser();
 
         <form id="settings-form">
             <div class="form-group">
-                <label>Username</label>
+                <label>Username <span style="color:#949ba4;font-size:.78rem">(a–z, 0–9, . _ only)</span></label>
                 <input type="text" id="settings-username" name="username"
-                       placeholder="<?php echo htmlspecialchars($user['username']); ?>">
+                       placeholder="<?php echo htmlspecialchars($user['username']); ?>"
+                       pattern="[a-z0-9._]{3,30}" title="3–30 chars, a-z 0-9 . _ only">
             </div>
             <div class="form-group">
-                <label>Email</label>
-                <input type="email" id="settings-email" name="email"
-                       placeholder="<?php echo htmlspecialchars($user['email']); ?>">
+                <label>Email <span style="color:#ed4245;font-size:.78rem">🔒 cannot be changed</span></label>
+                <input type="email" value="<?php echo htmlspecialchars($user['email']); ?>"
+                       disabled style="opacity:.5;cursor:not-allowed">
             </div>
             <div class="form-group">
                 <label>Phone</label>
@@ -329,6 +338,61 @@ $user = $auth->getCurrentUser();
             </div>
             <button type="submit">Save Changes</button>
         </form>
+    </div>
+</div>
+
+<!-- Manage Channels (Admin) -->
+<div id="manage-channels-modal" class="modal">
+    <div class="modal-content" style="max-width:700px">
+        <span class="close">&times;</span>
+        <h2>📋 Manage Channels</h2>
+        <div style="margin-bottom:12px">
+            <input type="text" id="channel-search" placeholder="Search channels…"
+                   style="width:100%;padding:8px 12px;background:#383a40;border:1px solid #4f545c;
+                          border-radius:6px;color:#fff;font-size:.9rem">
+        </div>
+        <div id="channels-table-container">
+            <table style="width:100%;border-collapse:collapse;font-size:.875rem">
+                <thead>
+                    <tr style="border-bottom:1px solid #3f4147;color:#949ba4;text-align:left">
+                        <th style="padding:8px 10px">Name</th>
+                        <th style="padding:8px 10px">Type</th>
+                        <th style="padding:8px 10px">Description</th>
+                        <th style="padding:8px 10px">Created</th>
+                        <th style="padding:8px 10px">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="channels-table-body">
+                    <tr><td colspan="5" style="text-align:center;padding:20px;color:#949ba4">Loading…</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Manage Invites (Admin) -->
+<div id="manage-invites-modal" class="modal">
+    <div class="modal-content" style="max-width:750px">
+        <span class="close">&times;</span>
+        <h2>📨 Manage Invites</h2>
+        <div id="invites-table-container">
+            <table style="width:100%;border-collapse:collapse;font-size:.875rem">
+                <thead>
+                    <tr style="border-bottom:1px solid #3f4147;color:#949ba4;text-align:left">
+                        <th style="padding:8px 10px">Code</th>
+                        <th style="padding:8px 10px">Type</th>
+                        <th style="padding:8px 10px">Role</th>
+                        <th style="padding:8px 10px">Created By</th>
+                        <th style="padding:8px 10px">Expires</th>
+                        <th style="padding:8px 10px">Status</th>
+                        <th style="padding:8px 10px">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="invites-table-body">
+                    <tr><td colspan="7" style="text-align:center;padding:20px;color:#949ba4">Loading…</td></tr>
+                </tbody>
+            </table>
+        </div>
     </div>
 </div>
 
