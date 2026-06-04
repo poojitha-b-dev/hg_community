@@ -18,41 +18,50 @@ $method = $_SERVER['REQUEST_METHOD'];
 
 switch ($method) {
     case 'POST':
-        $data = json_decode(file_get_contents('php://input'), true);
-        $email = $data['email'] ?? null;
-        $phone = $data['phone'] ?? null;
-        $role = $data['role'] ?? 'member';
-        $expiryHours = $data['expiry_hours'] ?? 24;
-        
-        $inviteCode = bin2hex(random_bytes(16));
-        $expiresAt = date('Y-m-d H:i:s', strtotime("+{$expiryHours} hours"));
-        
-        $insertQuery = "INSERT INTO invites (invite_code, created_by, email, phone, role, expires_at) 
-                        VALUES (:code, :created_by, :email, :phone, :role, :expires_at)";
-        $insertStmt = $db->prepare($insertQuery);
-        $insertStmt->bindParam(':code', $inviteCode);
-        $insertStmt->bindParam(':created_by', $_SESSION['user_id']);
-        $insertStmt->bindParam(':email', $email);
-        $insertStmt->bindParam(':phone', $phone);
-        $insertStmt->bindParam(':role', $role);
-        $insertStmt->bindParam(':expires_at', $expiresAt);
-        
-        if ($insertStmt->execute()) {
-            // Build dynamic URL instead of hardcoding
-            $host = $_SERVER['HTTP_HOST']; // localhost, 127.0.0.1, or domain
-            $protocol = isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http";
-            $inviteUrl = $protocol . "://" . $host . "/hg_community/register.php?invite=" . $inviteCode;
+        $data        = json_decode(file_get_contents('php://input'), true);
+        $inviteType  = in_array($data['invite_type'] ?? '', ['single','group']) ? $data['invite_type'] : 'single';
+        $email       = $data['email'] ?? null;
+        $role        = in_array($data['role'] ?? '', ['member','moderator']) ? $data['role'] : 'member';
+        $expiryHours = max(1, min(168, (int)($data['expiry_hours'] ?? 24)));
 
-
-            echo json_encode([
-                'success' => true, 
-                'invite_code' => $inviteCode,
-                'invite_url' => $inviteUrl,
-                'expires_at' => $expiresAt
-            ]);
-        } else {
-            echo json_encode(['success' => false, 'message' => 'Failed to create invite']);
+        // Single invites require an email
+        if ($inviteType === 'single' && empty($email)) {
+            echo json_encode(['success' => false, 'message' => 'Email is required for single-person invites.']);
+            exit;
         }
+
+        $inviteCode = bin2hex(random_bytes(16));
+        // Hard expiry — calculated exactly, never extended
+        $expiresAt  = date('Y-m-d H:i:s', time() + ($expiryHours * 3600));
+
+        $ins = $db->prepare(
+            "INSERT INTO invites (invite_code, created_by, email, role, invite_type, expires_at)
+             VALUES (:code, :created_by, :email, :role, :type, :expires_at)"
+        );
+        $ins->execute([
+            ':code'       => $inviteCode,
+            ':created_by' => $_SESSION['user_id'],
+            ':email'      => $email,
+            ':role'       => $role,
+            ':type'       => $inviteType,
+            ':expires_at' => $expiresAt,
+        ]);
+
+        // Build URL — works on Railway (https) and localhost (subfolder)
+        $protocol  = (!empty($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https')
+                     || (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+                     ? 'https' : 'http';
+        $host      = $_SERVER['HTTP_HOST'];
+        $scriptDir = rtrim(dirname(dirname($_SERVER['SCRIPT_NAME'])), '/');
+        $inviteUrl = $protocol . '://' . $host . $scriptDir . '/register.php?invite=' . $inviteCode;
+
+        echo json_encode([
+            'success'     => true,
+            'invite_code' => $inviteCode,
+            'invite_url'  => $inviteUrl,
+            'invite_type' => $inviteType,
+            'expires_at'  => $expiresAt,
+        ]);
         break;
         
     case 'DELETE':

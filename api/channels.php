@@ -39,15 +39,35 @@ $method = $_SERVER['REQUEST_METHOD'];
 try {
     switch ($method) {
 
-        // ── GET: fetch all channels ───────────────────────────────────────────
+        // ── GET: fetch channels ───────────────────────────────────────────────
         case 'GET':
-            $stmt = $db->prepare(
-                "SELECT c.*, u.username AS created_by_name
-                 FROM channels c
-                 LEFT JOIN users u ON c.created_by = u.id
-                 ORDER BY c.type, c.name"
-            );
-            $stmt->execute();
+            $userId = (int)$_SESSION['user_id'];
+            $role   = $_SESSION['role'];
+
+            // Admins and moderators see all channels
+            // Members only see: non-team channels + team channels they belong to
+            if ($role === 'admin' || $role === 'moderator') {
+                $stmt = $db->prepare(
+                    "SELECT c.*, u.username AS created_by_name
+                     FROM channels c
+                     LEFT JOIN users u ON c.created_by = u.id
+                     ORDER BY c.type, c.name"
+                );
+                $stmt->execute();
+            } else {
+                $stmt = $db->prepare(
+                    "SELECT c.*, u.username AS created_by_name
+                     FROM channels c
+                     LEFT JOIN users u ON c.created_by = u.id
+                     WHERE c.type != 'team'
+                        OR c.id IN (
+                            SELECT channel_id FROM team_members
+                            WHERE user_id = :uid
+                        )
+                     ORDER BY c.type, c.name"
+                );
+                $stmt->execute([':uid' => $userId]);
+            }
             echo json_encode(['success' => true, 'channels' => $stmt->fetchAll(PDO::FETCH_ASSOC)]);
             break;
 
@@ -97,10 +117,18 @@ try {
                  VALUES (?, ?, ?, ?, ?)"
             );
             if ($ins->execute([$name, $description, $type, $teamName, $_SESSION['user_id']])) {
+                $newChannelId = $db->lastInsertId();
+                // Auto-add creator to team membership
+                if ($type === 'team') {
+                    $db->prepare(
+                        "INSERT IGNORE INTO team_members (channel_id, user_id, added_by)
+                         VALUES (?, ?, ?)"
+                    )->execute([$newChannelId, $_SESSION['user_id'], $_SESSION['user_id']]);
+                }
                 echo json_encode([
                     'success'    => true,
                     'message'    => 'Channel created successfully',
-                    'channel_id' => $db->lastInsertId(),
+                    'channel_id' => $newChannelId,
                 ]);
             } else {
                 $err = $ins->errorInfo();
@@ -204,6 +232,64 @@ try {
                 echo json_encode(['success' => true, 'message' => 'Channel deleted']);
             } else {
                 echo json_encode(['success' => false, 'message' => 'Failed to delete channel']);
+            }
+            break;
+
+        // ── PATCH: manage team members ────────────────────────────────────────
+        case 'PATCH':
+            if (!$auth->hasPermission('manage_channels')) {
+                http_response_code(403);
+                echo json_encode(['success' => false, 'message' => 'Permission denied']);
+                exit;
+            }
+
+            $data      = json_decode(file_get_contents('php://input'), true);
+            $action    = $data['action']     ?? '';
+            $channelId = (int)($data['channel_id'] ?? 0);
+            $targetId  = (int)($data['user_id']    ?? 0);
+
+            if (!$channelId || !$targetId) {
+                echo json_encode(['success' => false, 'message' => 'channel_id and user_id required']);
+                exit;
+            }
+
+            // Verify it's a team channel
+            $ch = $db->prepare("SELECT type FROM channels WHERE id = ?");
+            $ch->execute([$channelId]);
+            $chRow = $ch->fetch(PDO::FETCH_ASSOC);
+            if (!$chRow || $chRow['type'] !== 'team') {
+                echo json_encode(['success' => false, 'message' => 'Not a team channel']);
+                exit;
+            }
+
+            if ($action === 'add_member') {
+                $db->prepare(
+                    "INSERT IGNORE INTO team_members (channel_id, user_id, added_by)
+                     VALUES (?, ?, ?)"
+                )->execute([$channelId, $targetId, $_SESSION['user_id']]);
+                echo json_encode(['success' => true, 'message' => 'Member added to team']);
+            } elseif ($action === 'remove_member') {
+                $db->prepare(
+                    "DELETE FROM team_members WHERE channel_id = ? AND user_id = ?"
+                )->execute([$channelId, $targetId]);
+                echo json_encode(['success' => true, 'message' => 'Member removed from team']);
+            } elseif ($action === 'list_members') {
+                $stmt = $db->prepare(
+                    "SELECT u.id, u.username, u.role, u.avatar
+                     FROM team_members tm
+                     JOIN users u ON tm.user_id = u.id
+                     WHERE tm.channel_id = ?
+                     ORDER BY u.username"
+                );
+                $stmt->execute([$channelId]);
+                $members = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                foreach ($members as &$m) {
+                    if (empty($m['avatar']) || $m['avatar'] === 'default-avatar.png')
+                        $m['avatar'] = 'assets/images/default-avatar.png';
+                }
+                echo json_encode(['success' => true, 'members' => $members]);
+            } else {
+                echo json_encode(['success' => false, 'message' => 'Invalid action']);
             }
             break;
 

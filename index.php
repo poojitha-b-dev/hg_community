@@ -81,6 +81,10 @@ $user = $auth->getCurrentUser();
         <?php endif; ?>
 
         <div class="user-controls">
+            <button id="connections-btn" class="control-btn">🤝 Connections
+                <span id="conn-requests-badge" style="display:none;background:#ed4245;color:#fff;
+                    border-radius:8px;padding:1px 6px;font-size:.72rem;margin-left:4px"></span>
+            </button>
             <button id="dm-btn" class="control-btn">
                 💬 Messages
                 <span id="dm-sidebar-badge" class="dm-sidebar-badge" style="display:none"></span>
@@ -113,6 +117,14 @@ $user = $auth->getCurrentUser();
                     📌 Pinned
                 </button>
 
+                <?php if ($user['role'] === 'admin' || $user['role'] === 'moderator'): ?>
+                <!-- Manage team members (team channels only) -->
+                <button id="manage-team-btn" class="action-btn" title="Manage team members"
+                        style="display:none;align-items:center;gap:5px">
+                    👥 Manage Team
+                </button>
+                <?php endif; ?>
+
                 <?php if ($user['role'] === 'admin'): ?>
                 <!-- Edit / Delete current channel (admin only) -->
                 <button id="edit-channel-btn"   class="action-btn" title="Edit channel"   style="display:none">✏️ Edit</button>
@@ -133,6 +145,14 @@ $user = $auth->getCurrentUser();
 
         <!-- Typing indicator -->
         <div id="typing-indicator" class="typing-indicator"></div>
+
+        <!-- Read-only bar for members in announcement channels -->
+        <div id="announce-readonly-bar" style="display:none;align-items:center;gap:10px;
+             padding:14px 20px;background:#1e1f22;border-top:1px solid #3f4147;
+             color:#949ba4;font-size:.88rem">
+            <span style="font-size:1.1rem">📢</span>
+            <span>This is an announcement channel. Only admins and moderators can post here.</span>
+        </div>
 
         <!-- Message input -->
         <div class="message-input-container" style="display:none">
@@ -240,18 +260,43 @@ $user = $auth->getCurrentUser();
 
 <!-- Create Invite -->
 <div id="create-invite-modal" class="modal">
-    <div class="modal-content">
+    <div class="modal-content" style="max-width:480px">
         <span class="close">&times;</span>
-        <h2>Create Invite Link</h2>
+        <h2>🔗 Create Invite</h2>
+
         <form id="create-invite-form">
+            <!-- Invite type selector -->
             <div class="form-group">
-                <label>Email (Optional)</label>
-                <input type="email" id="invite-email" name="email">
+                <label>Invite Type</label>
+                <div class="invite-type-selector">
+                    <label class="invite-type-option" id="invite-type-single-label">
+                        <input type="radio" name="invite_type" value="single" id="invite-type-single" checked>
+                        <div class="invite-type-card">
+                            <span class="invite-type-icon">👤</span>
+                            <strong>Single Person</strong>
+                            <small>One-time use — link expires after first registration</small>
+                        </div>
+                    </label>
+                    <label class="invite-type-option" id="invite-type-group-label">
+                        <input type="radio" name="invite_type" value="group" id="invite-type-group">
+                        <div class="invite-type-card">
+                            <span class="invite-type-icon">👥</span>
+                            <strong>Group Link</strong>
+                            <small>Multiple people can use the same link until it expires</small>
+                        </div>
+                    </label>
+                </div>
             </div>
-            <div class="form-group">
-                <label>Phone (Optional)</label>
-                <input type="tel" id="invite-phone" name="phone">
+
+            <!-- Email — required for single, hidden for group -->
+            <div class="form-group" id="invite-email-group">
+                <label>Email <span style="color:#ed4245">*</span>
+                    <span style="color:#949ba4;font-size:.78rem;font-weight:400"> — required for single invites</span>
+                </label>
+                <input type="email" id="invite-email" name="email" required
+                       placeholder="person@example.com">
             </div>
+
             <div class="form-group">
                 <label>Role</label>
                 <select id="invite-role" name="role">
@@ -259,22 +304,135 @@ $user = $auth->getCurrentUser();
                     <option value="moderator">Moderator</option>
                 </select>
             </div>
+
             <div class="form-group">
-                <label>Expires in (hours)</label>
-                <input type="number" id="expiry-hours" name="expiry_hours" value="24" min="1" max="168">
+                <label>Expires in</label>
+                <select id="expiry-hours" name="expiry_hours">
+                    <option value="1">1 hour</option>
+                    <option value="6">6 hours</option>
+                    <option value="12">12 hours</option>
+                    <option value="24" selected>24 hours</option>
+                    <option value="48">2 days</option>
+                    <option value="168">7 days</option>
+                </select>
+                <small style="color:#949ba4;font-size:.78rem;margin-top:4px;display:block">
+                    ⚠️ Link will hard-expire at exactly this time — no extensions
+                </small>
             </div>
-            <button type="submit">Create Invite</button>
+
+            <button type="submit" style="width:100%;padding:10px;background:#5865f2;color:#fff;border:none;border-radius:8px;font-size:.95rem;font-weight:600;cursor:pointer">
+                Generate Invite
+            </button>
         </form>
-        <div id="invite-result" style="display:none">
-            <h3>Invite Created!</h3>
-            <div class="invite-info">
-                <label>Invite Link:</label>
-                <input type="text" id="invite-url" readonly>
-                <button onclick="copyInviteLink()">Copy</button>
+
+        <div id="invite-result" style="display:none;margin-top:16px">
+            <div style="background:#2b2d31;border-radius:8px;padding:16px">
+                <p style="color:#23a559;font-weight:600;margin-bottom:12px">✅ Invite created!</p>
+                <div style="margin-bottom:10px">
+                    <label style="color:#949ba4;font-size:.8rem;display:block;margin-bottom:4px">Invite Link</label>
+                    <div style="display:flex;gap:6px">
+                        <input type="text" id="invite-url" readonly
+                               style="flex:1;background:#383a40;border:1px solid #4f545c;border-radius:6px;
+                                      padding:8px 10px;color:#fff;font-size:.82rem;font-family:monospace">
+                        <button onclick="copyInviteLink()"
+                                style="background:#5865f2;color:#fff;border:none;border-radius:6px;
+                                       padding:8px 14px;cursor:pointer;font-size:.82rem;font-weight:600;white-space:nowrap">
+                            Copy
+                        </button>
+                    </div>
+                </div>
+                <div>
+                    <label style="color:#949ba4;font-size:.8rem;display:block;margin-bottom:4px">Expires</label>
+                    <span id="invite-expires-display" style="color:#f0b232;font-size:.85rem"></span>
+                </div>
+                <button onclick="app.resetInviteForm()"
+                        style="margin-top:12px;background:transparent;border:1px solid #4f545c;color:#949ba4;
+                               border-radius:6px;padding:6px 14px;cursor:pointer;font-size:.82rem">
+                    Create Another
+                </button>
             </div>
-            <div class="invite-info">
-                <label>Invite Code:</label>
-                <input type="text" id="invite-code" readonly>
+        </div>
+    </div>
+</div>
+
+<!-- Profile View Modal -->
+<div id="profile-modal" class="modal">
+    <div class="modal-content" style="max-width:380px;text-align:center">
+        <span class="close">&times;</span>
+        <div style="padding:20px 10px 10px">
+            <img id="profile-modal-avatar"
+                 src="assets/images/default-avatar.png"
+                 onerror="this.src='assets/images/default-avatar.png'"
+                 style="width:90px;height:90px;border-radius:50%;object-fit:cover;
+                        border:3px solid #5865f2;margin-bottom:12px">
+            <div id="profile-modal-username"
+                 style="font-size:1.15rem;font-weight:700;color:#fff;margin-bottom:4px"></div>
+            <div id="profile-modal-role" style="margin-bottom:10px"></div>
+            <div id="profile-modal-bio"
+                 style="color:#949ba4;font-size:.88rem;line-height:1.5;margin-bottom:14px;
+                        min-height:20px;padding:0 10px"></div>
+            <div id="profile-modal-joined"
+                 style="color:#72767d;font-size:.78rem;margin-bottom:16px"></div>
+            <!-- Connection status + action -->
+            <div id="profile-modal-connection" style="margin-bottom:10px"></div>
+            <button id="profile-modal-dm-btn"
+                    style="background:#5865f2;color:#fff;border:none;border-radius:8px;
+                           padding:9px 24px;font-size:.9rem;font-weight:600;cursor:pointer;
+                           width:100%;display:none">
+                Send Message
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Connections Page -->
+<div id="connections-modal" class="modal">
+    <div class="modal-content" style="max-width:720px">
+        <span class="close">&times;</span>
+        <h2>🤝 Connections</h2>
+
+        <!-- Tabs -->
+        <div style="display:flex;gap:4px;margin-bottom:20px;background:#2b2d31;
+                    border-radius:8px;padding:4px">
+            <button class="conn-tab active" data-tab="my-connections"
+                    style="flex:1;padding:8px;border:none;border-radius:6px;cursor:pointer;
+                           font-size:.88rem;font-weight:600;background:#5865f2;color:#fff">
+                My Connections
+            </button>
+            <button class="conn-tab" data-tab="requests"
+                    style="flex:1;padding:8px;border:none;border-radius:6px;cursor:pointer;
+                           font-size:.88rem;font-weight:600;background:transparent;color:#949ba4">
+                Requests <span id="requests-badge" style="display:none;background:#ed4245;
+                    color:#fff;border-radius:8px;padding:1px 6px;font-size:.72rem;margin-left:4px"></span>
+            </button>
+            <button class="conn-tab" data-tab="discover"
+                    style="flex:1;padding:8px;border:none;border-radius:6px;cursor:pointer;
+                           font-size:.88rem;font-weight:600;background:transparent;color:#949ba4">
+                Discover People
+            </button>
+        </div>
+
+        <!-- My Connections -->
+        <div id="tab-my-connections" class="conn-tab-content">
+            <div id="connections-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px">
+                <p style="color:#949ba4;grid-column:1/-1;text-align:center;padding:30px">Loading…</p>
+            </div>
+        </div>
+
+        <!-- Requests -->
+        <div id="tab-requests" class="conn-tab-content" style="display:none">
+            <div id="requests-list">
+                <p style="color:#949ba4;text-align:center;padding:30px">Loading…</p>
+            </div>
+        </div>
+
+        <!-- Discover -->
+        <div id="tab-discover" class="conn-tab-content" style="display:none">
+            <input type="text" id="discover-search" placeholder="Search people…"
+                   style="width:100%;padding:8px 12px;background:#383a40;border:1px solid #4f545c;
+                          border-radius:6px;color:#fff;font-size:.9rem;margin-bottom:12px">
+            <div id="discover-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px">
+                <p style="color:#949ba4;grid-column:1/-1;text-align:center;padding:30px">Loading…</p>
             </div>
         </div>
     </div>
@@ -297,6 +455,16 @@ $user = $auth->getCurrentUser();
                     Change Avatar
                 </label>
                 <input type="file" id="avatar-upload" accept="image/*" style="display:none">
+            </div>
+            <div style="margin-top:10px">
+                <label style="color:#949ba4;font-size:.8rem;display:block;margin-bottom:4px">Who can see my avatar</label>
+                <select id="settings-avatar-visibility"
+                        style="background:#383a40;border:1px solid #4f545c;border-radius:6px;
+                               color:#dcddde;padding:6px 10px;font-size:.85rem;width:100%;max-width:220px">
+                    <option value="everyone"    <?php echo ($user['avatar_visibility']??'everyone')==='everyone'    ? 'selected' : ''; ?>>🌐 Everyone</option>
+                    <option value="connections" <?php echo ($user['avatar_visibility']??'everyone')==='connections' ? 'selected' : ''; ?>>🤝 Connections only</option>
+                    <option value="nobody"      <?php echo ($user['avatar_visibility']??'everyone')==='nobody'      ? 'selected' : ''; ?>>🔒 Nobody</option>
+                </select>
             </div>
         </div>
 
@@ -338,6 +506,17 @@ $user = $auth->getCurrentUser();
             </div>
             <button type="submit">Save Changes</button>
         </form>
+    </div>
+</div>
+
+<!-- Team Member Manager -->
+<div id="team-manager-modal" class="modal">
+    <div class="modal-content" style="max-width:500px">
+        <span class="close">&times;</span>
+        <h2 id="team-manager-title">👥 Team Members</h2>
+        <div id="team-members-list" style="max-height:480px;overflow-y:auto">
+            <p style="color:#949ba4;text-align:center;padding:20px">Loading…</p>
+        </div>
     </div>
 </div>
 
@@ -398,15 +577,34 @@ $user = $auth->getCurrentUser();
 
 <!-- Manage Users (Admin) -->
 <div id="manage-users-modal" class="modal">
-    <div class="modal-content" style="max-width:700px">
+    <div class="modal-content" style="max-width:740px">
         <span class="close">&times;</span>
-        <h2>Manage Users</h2>
+        <h2>👥 Manage Users</h2>
+
+        <!-- Status legend -->
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px;
+                    background:#2b2d31;border-radius:8px;padding:10px 14px">
+            <span style="font-size:.78rem;color:#949ba4;font-weight:600;align-self:center">Status:</span>
+            <span class="status-legend-item" title="User can access everything normally">
+                <span style="color:#23a559">●</span> Active — full access
+            </span>
+            <span class="status-legend-item" title="Can read messages but cannot send any">
+                <span style="color:#f0b232">●</span> Muted — read only
+            </span>
+            <span class="status-legend-item" title="Can only see public channels, cannot DM or post">
+                <span style="color:#949ba4">●</span> Restricted — public channels only, no DMs
+            </span>
+            <span class="status-legend-item" title="Completely blocked from the platform">
+                <span style="color:#ed4245">●</span> Banned — no access
+            </span>
+        </div>
+
         <div style="margin-bottom:12px">
             <input type="text" id="user-search" placeholder="Search users…"
                    style="width:100%;padding:8px 12px;background:#383a40;border:1px solid #4f545c;
                           border-radius:6px;color:#fff;font-size:.9rem">
         </div>
-        <div id="users-table-container">
+        <div id="users-table-container" style="overflow-x:auto">
             <table id="users-table" style="width:100%;border-collapse:collapse;font-size:.875rem">
                 <thead>
                     <tr style="border-bottom:1px solid #3f4147;color:#949ba4;text-align:left">
@@ -414,7 +612,7 @@ $user = $auth->getCurrentUser();
                         <th style="padding:8px 10px">Email</th>
                         <th style="padding:8px 10px">Role</th>
                         <th style="padding:8px 10px">Status</th>
-                        <th style="padding:8px 10px">Actions</th>
+                        <th style="padding:8px 10px;min-width:220px">Actions</th>
                     </tr>
                 </thead>
                 <tbody id="users-table-body">
@@ -472,11 +670,109 @@ $user = $auth->getCurrentUser();
      DM — Conversations list
 ════════════════════════════════════════════════════════════════════════════ -->
 <div id="dm-list-modal" class="modal">
-    <div class="modal-content" style="max-width:460px">
+    <div class="modal-content" style="max-width:480px">
         <span class="close">&times;</span>
-        <h2>💬 Direct Messages</h2>
-        <div class="dm-conversations-list" id="dm-conversations-list">
-            <p class="dm-conv-empty">Loading…</p>
+        <h2>💬 Messages</h2>
+
+        <!-- Tabs -->
+        <div style="display:flex;gap:4px;margin-bottom:16px;background:#2b2d31;border-radius:8px;padding:4px">
+            <button class="dm-main-tab active" data-tab="dms"
+                    style="flex:1;padding:8px;border:none;border-radius:6px;cursor:pointer;
+                           font-size:.88rem;font-weight:600;background:#5865f2;color:#fff">
+                Direct Messages
+            </button>
+            <button class="dm-main-tab" data-tab="groups"
+                    style="flex:1;padding:8px;border:none;border-radius:6px;cursor:pointer;
+                           font-size:.88rem;font-weight:600;background:transparent;color:#949ba4">
+                Group Chats
+            </button>
+        </div>
+
+        <!-- DMs tab -->
+        <div id="dm-tab-dms">
+            <div class="dm-conversations-list" id="dm-conversations-list">
+                <p class="dm-conv-empty">Loading…</p>
+            </div>
+        </div>
+
+        <!-- Groups tab -->
+        <div id="dm-tab-groups" style="display:none">
+            <button onclick="groupChats.openCreateGroup()"
+                    style="width:100%;padding:9px;background:#5865f2;color:#fff;border:none;
+                           border-radius:8px;font-size:.88rem;font-weight:600;cursor:pointer;margin-bottom:12px">
+                + Create Group Chat
+            </button>
+            <div id="group-chats-list">
+                <p class="dm-conv-empty">Loading…</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Create Group Chat Modal -->
+<div id="create-group-modal" class="modal">
+    <div class="modal-content" style="max-width:440px">
+        <span class="close">&times;</span>
+        <h2>👥 Create Group Chat</h2>
+        <div class="form-group">
+            <label>Group Name</label>
+            <input type="text" id="group-name-input" placeholder="e.g. Study Buddies"
+                   style="width:100%;padding:9px 12px;background:#383a40;border:1px solid #4f545c;
+                          border-radius:6px;color:#fff;font-size:.9rem">
+        </div>
+        <div class="form-group" style="margin-top:12px">
+            <label>Add Members <span style="color:#949ba4;font-size:.78rem">(from your connections)</span></label>
+            <div id="group-member-picker" style="max-height:260px;overflow-y:auto;margin-top:8px;
+                 background:#2b2d31;border-radius:8px;padding:8px">
+                <p style="color:#949ba4;text-align:center;padding:16px">Loading connections…</p>
+            </div>
+        </div>
+        <button onclick="groupChats.createGroup()"
+                style="width:100%;margin-top:14px;padding:10px;background:#5865f2;color:#fff;
+                       border:none;border-radius:8px;font-size:.95rem;font-weight:600;cursor:pointer">
+            Create Group
+        </button>
+    </div>
+</div>
+
+<!-- Group Chat Conversation Modal -->
+<div id="group-chat-modal" class="modal">
+    <div class="modal-content dm-modal-content" style="max-width:620px">
+        <div class="dm-header">
+            <button class="dm-back-btn" onclick="groupChats.backToList()">← Back</button>
+            <div class="dm-recipient-info">
+                <span style="font-size:1.2rem">👥</span>
+                <span class="dm-recipient-name" id="group-chat-title">Group</span>
+                <span id="group-member-count" style="color:#949ba4;font-size:.78rem"></span>
+            </div>
+            <button onclick="groupChats.openGroupInfo()"
+                    style="background:none;border:none;color:#949ba4;cursor:pointer;font-size:.82rem;
+                           padding:5px 8px;border-radius:5px" title="Group info">ℹ️</button>
+            <button onclick="groupChats.leaveGroup()"
+                    style="background:none;border:none;color:#ed4245;cursor:pointer;font-size:.78rem;
+                           padding:5px 8px;border-radius:5px" title="Leave group">Leave</button>
+        </div>
+        <div class="dm-messages" id="group-messages"></div>
+        <div class="dm-input-area">
+            <div class="dm-input-row">
+                <input type="text" id="group-message-input" placeholder="Message group…"
+                       onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();groupChats.sendMessage();}">
+                <button class="dm-send-btn" onclick="groupChats.sendMessage()">Send</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Group Info Modal -->
+<div id="group-info-modal" class="modal">
+    <div class="modal-content" style="max-width:400px">
+        <span class="close">&times;</span>
+        <h2 id="group-info-title">Group Info</h2>
+        <div id="group-info-members"></div>
+        <div id="group-add-member-section" style="display:none;margin-top:16px">
+            <div style="color:#949ba4;font-size:.78rem;font-weight:600;text-transform:uppercase;
+                        letter-spacing:.5px;margin-bottom:8px">Add Member</div>
+            <div id="group-add-picker"></div>
         </div>
     </div>
 </div>

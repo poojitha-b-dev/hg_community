@@ -155,37 +155,9 @@ body {
 .channel-item.active .unread-badge { display: none !important; }
 
 /* Controls */
-.admin-panel {
-    border-top: 1px solid #3f4147;
-}
-
-.admin-panel-toggle {
-    width: 100%;
-    padding: 10px 12px;
-    background: transparent;
-    color: #949ba4;
-    border: none;
-    border-bottom: 1px solid transparent;
-    font-size: .82rem;
-    font-weight: 600;
-    cursor: pointer;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    letter-spacing: .4px;
-    text-transform: uppercase;
-    transition: color .15s;
-}
-.admin-panel-toggle:hover { color: #dbdee1; }
-.admin-toggle-icon { font-size: .7rem; transition: transform .2s; }
-
-.admin-controls {
-    padding: 8px 12px 12px;
-    border-bottom: 1px solid #3f4147;
-}
-
 .admin-controls, .user-controls {
     padding: 12px;
+    border-top: 1px solid #3f4147;
 }
 
 .control-btn {
@@ -751,7 +723,38 @@ body {
 }
 
 /* Tablet: narrow sidebar */
-@media (max-width: 768px) {
+/* ── Invite type selector ──────────────────────────────────────────────────── */
+.invite-type-selector {
+    display: flex;
+    gap: 10px;
+}
+.invite-type-option {
+    flex: 1;
+    cursor: pointer;
+}
+.invite-type-option input[type="radio"] {
+    display: none;
+}
+.invite-type-card {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 12px;
+    background: #2b2d31;
+    border: 2px solid #3f4147;
+    border-radius: 8px;
+    transition: border-color .15s, background .15s;
+}
+.invite-type-card .invite-type-icon { font-size: 1.4rem; }
+.invite-type-card strong { color: #fff; font-size: .88rem; }
+.invite-type-card small  { color: #949ba4; font-size: .76rem; line-height: 1.4; }
+.invite-type-option input:checked + .invite-type-card {
+    border-color: #5865f2;
+    background: #2e3065;
+}
+.invite-type-option:hover .invite-type-card { border-color: #5865f2; }
+
+/* ── End invite styles ─────────────────────────────────────────────────────── */
     .sidebar-left { width: 220px; }
 
     .modal-content { width: 95%; margin: 8% auto; padding: 18px; }

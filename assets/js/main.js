@@ -169,12 +169,34 @@ class CommunityApp {
                 document.getElementById('invite-result').style.display = 'none';
                 createInviteForm.style.display = 'block';
                 createInviteForm.reset();
+                // Reset to single by default
+                document.getElementById('invite-email-group').style.display = 'block';
+                document.getElementById('invite-email').required = true;
             });
             createInviteForm.addEventListener('submit', (e) => {
                 e.preventDefault();
                 this.createInvite();
             });
+            // Toggle email field based on invite type
+            createInviteForm.querySelectorAll('input[name="invite_type"]').forEach(radio => {
+                radio.addEventListener('change', (e) => {
+                    const emailGroup = document.getElementById('invite-email-group');
+                    const emailInput = document.getElementById('invite-email');
+                    if (e.target.value === 'group') {
+                        emailGroup.style.display = 'none';
+                        emailInput.required = false;
+                        emailInput.value = '';
+                    } else {
+                        emailGroup.style.display = 'block';
+                        emailInput.required = true;
+                    }
+                });
+            });
         }
+
+        // Connections
+        const connectionsBtn = document.getElementById('connections-btn');
+        if (connectionsBtn) connectionsBtn.addEventListener('click', () => connections.open());
 
         // Settings
         const settingsBtn  = document.getElementById('settings-btn');
@@ -285,18 +307,34 @@ class CommunityApp {
         if (el) el.classList.add('active');
 
         document.getElementById('current-channel').textContent = channelName;
-        document.getElementById('current-channel-id').value   = channelId;
-        document.querySelector('.message-input-container').style.display = 'block';
+        document.getElementById('current-channel-id').value    = channelId;
 
-        // Clear local unread badge immediately
+        const channel     = this.channels.find(c => c.id == channelId);
+        const isAnnounce  = channel?.type === 'announcement';
+        const isTeam      = channel?.type === 'team';
+        const canPost     = currentUser.role === 'admin' || currentUser.role === 'moderator';
+        const inputArea   = document.querySelector('.message-input-container');
+        const announceBar = document.getElementById('announce-readonly-bar');
+
+        if (isAnnounce && !canPost) {
+            inputArea.style.display  = 'none';
+            if (announceBar) announceBar.style.display = 'flex';
+        } else {
+            inputArea.style.display  = 'block';
+            if (announceBar) announceBar.style.display = 'none';
+        }
+
+        // Show/hide manage team button
+        const manageTeamBtn = document.getElementById('manage-team-btn');
+        if (manageTeamBtn) {
+            manageTeamBtn.style.display = (isTeam && canPost) ? 'inline-flex' : 'none';
+            manageTeamBtn.onclick = () => this.openTeamManager(channelId, channelName);
+        }
+
         this.clearUnreadBadge(channelId);
-
         this.currentChannelId = channelId;
         this.messages         = [];
-
-        // Switch typing SSE to new channel
         this.startTypingSSE(channelId);
-
         this.loadMessages();
     }
 
@@ -304,7 +342,125 @@ class CommunityApp {
     // Messages — load, render, send
     // ══════════════════════════════════════════════════════════════════════════
 
-    async loadMessages(isAutoRefresh = false) {
+    async openTeamManager(channelId, channelName) {
+        const modal = document.getElementById('team-manager-modal');
+        document.getElementById('team-manager-title').textContent = `👥 ${channelName} — Members`;
+        modal.style.display = 'block';
+        modal.dataset.channelId = channelId;
+        this.loadTeamMembers(channelId);
+    }
+
+    async loadTeamMembers(channelId) {
+        const list = document.getElementById('team-members-list');
+        list.innerHTML = '<p style="color:#949ba4;text-align:center;padding:20px">Loading…</p>';
+
+        try {
+            // Load current members and all users in parallel
+            const [membRes, usersRes] = await Promise.all([
+                fetch('api/channels.php', {
+                    method: 'PATCH', headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({ action: 'list_members', channel_id: channelId, user_id: 0 }),
+                }),
+                fetch('api/users.php'),
+            ]);
+            const membData  = await membRes.json();
+            const usersData = await usersRes.json();
+
+            const members    = membData.members || [];
+            const memberIds  = new Set(members.map(m => m.id));
+            const allUsers   = (usersData.users || []).filter(u => u.role !== 'admin');
+            const nonMembers = allUsers.filter(u => !memberIds.has(u.id));
+
+            list.innerHTML = '';
+
+            // Current members section
+            if (members.length) {
+                list.innerHTML += `<div style="color:#949ba4;font-size:.78rem;font-weight:600;
+                    text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Current Members</div>`;
+                members.forEach(m => {
+                    list.innerHTML += `
+                        <div style="display:flex;align-items:center;gap:10px;padding:8px;
+                                    background:#2b2d31;border-radius:8px;margin-bottom:6px">
+                            <img src="${m.avatar}" onerror="this.src='assets/images/default-avatar.png'"
+                                 style="width:34px;height:34px;border-radius:50%;object-fit:cover">
+                            <div style="flex:1">
+                                <div style="color:#fff;font-weight:600;font-size:.88rem">${this.escapeHtml(m.username)}</div>
+                                <span class="role-badge role-${m.role}">${m.role}</span>
+                            </div>
+                            <button onclick="app.removeTeamMember(${channelId},${m.id})"
+                                    style="background:#ed4245;color:#fff;border:none;border-radius:6px;
+                                           padding:4px 10px;font-size:.78rem;cursor:pointer;font-weight:600">
+                                Remove
+                            </button>
+                        </div>`;
+                });
+            }
+
+            // Add members section
+            if (nonMembers.length) {
+                list.innerHTML += `<div style="color:#949ba4;font-size:.78rem;font-weight:600;
+                    text-transform:uppercase;letter-spacing:.5px;margin:16px 0 8px">Add Members</div>`;
+                nonMembers.forEach(u => {
+                    list.innerHTML += `
+                        <div style="display:flex;align-items:center;gap:10px;padding:8px;
+                                    background:#2b2d31;border-radius:8px;margin-bottom:6px">
+                            <img src="${u.avatar||'assets/images/default-avatar.png'}"
+                                 onerror="this.src='assets/images/default-avatar.png'"
+                                 style="width:34px;height:34px;border-radius:50%;object-fit:cover">
+                            <div style="flex:1">
+                                <div style="color:#fff;font-weight:600;font-size:.88rem">${this.escapeHtml(u.username)}</div>
+                                <span class="role-badge role-${u.role}">${u.role}</span>
+                            </div>
+                            <button onclick="app.addTeamMember(${channelId},${u.id})"
+                                    style="background:#23a559;color:#fff;border:none;border-radius:6px;
+                                           padding:4px 10px;font-size:.78rem;cursor:pointer;font-weight:600">
+                                + Add
+                            </button>
+                        </div>`;
+                });
+            }
+
+            if (!members.length && !nonMembers.length) {
+                list.innerHTML = '<p style="color:#949ba4;text-align:center;padding:20px">No users found.</p>';
+            }
+        } catch (e) {
+            list.innerHTML = '<p style="color:#ed4245;text-align:center;padding:20px">Error loading members.</p>';
+        }
+    }
+
+    async addTeamMember(channelId, userId) {
+        try {
+            const res  = await fetch('api/channels.php', {
+                method: 'PATCH', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ action: 'add_member', channel_id: channelId, user_id: userId }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.showNotification('Member added!', 'success');
+                this.loadTeamMembers(channelId);
+            } else {
+                this.showNotification(data.message, 'error');
+            }
+        } catch (e) { this.showNotification('Error adding member', 'error'); }
+    }
+
+    async removeTeamMember(channelId, userId) {
+        if (!confirm('Remove this member from the team?')) return;
+        try {
+            const res  = await fetch('api/channels.php', {
+                method: 'PATCH', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ action: 'remove_member', channel_id: channelId, user_id: userId }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.showNotification('Member removed.', 'success');
+                this.loadTeamMembers(channelId);
+                await this.loadChannels(); // refresh sidebar in case they lost access
+            } else {
+                this.showNotification(data.message, 'error');
+            }
+        } catch (e) { this.showNotification('Error removing member', 'error'); }
+    }
         if (!this.currentChannelId) return;
 
         try {
@@ -742,7 +898,6 @@ class CommunityApp {
         el.dataset.userId = user.id;
 
         const avatarSrc = user.avatar || 'assets/images/default-avatar.png';
-        // Don't show DM button for self
         const dmBtnHtml = (user.id != currentUser.id)
             ? `<button class="member-dm-btn" title="Send DM">DM</button>`
             : '';
@@ -759,6 +914,13 @@ class CommunityApp {
             ${dmBtnHtml}
         `;
 
+        // Click member name/avatar → open profile
+        el.addEventListener('click', (e) => {
+            if (!e.target.classList.contains('member-dm-btn')) {
+                this.openProfile(user);
+            }
+        });
+
         const dmBtn = el.querySelector('.member-dm-btn');
         if (dmBtn) {
             dmBtn.addEventListener('click', (e) => {
@@ -768,6 +930,99 @@ class CommunityApp {
         }
 
         return el;
+    }
+
+    async openProfile(user) {
+        const modal    = document.getElementById('profile-modal');
+        const avatarEl = document.getElementById('profile-modal-avatar');
+        const nameEl   = document.getElementById('profile-modal-username');
+        const roleEl   = document.getElementById('profile-modal-role');
+        const bioEl    = document.getElementById('profile-modal-bio');
+        const joinedEl = document.getElementById('profile-modal-joined');
+        const dmBtn    = document.getElementById('profile-modal-dm-btn');
+        const connDiv  = document.getElementById('profile-modal-connection');
+
+        nameEl.textContent  = user.username;
+        roleEl.innerHTML    = `<span class="role-badge role-${user.role}">${user.role}</span>`;
+        bioEl.textContent   = 'Loading…';
+        avatarEl.src        = 'assets/images/default-avatar.png';
+        if (connDiv) connDiv.innerHTML = '';
+        if (dmBtn)   dmBtn.style.display = 'none';
+        modal.style.display = 'block';
+
+        try {
+            const [profileRes, statusRes] = await Promise.all([
+                fetch(`api/users.php?profile=${user.id}`),
+                user.id != currentUser.id ? fetch(`api/connections.php?status=${user.id}`) : Promise.resolve(null),
+            ]);
+
+            const profileData = await profileRes.json();
+            const u = profileData.success ? profileData.user : user;
+
+            // Avatar visibility
+            const vis = u.avatar_visibility || 'everyone';
+            const showAvatar = vis === 'everyone' || vis === 'connections';
+            avatarEl.src = (showAvatar && u.avatar && u.avatar !== 'assets/images/default-avatar.png')
+                ? u.avatar + '?t=' + Date.now()
+                : 'assets/images/default-avatar.png';
+
+            bioEl.textContent    = u.bio || 'No bio yet.';
+            joinedEl.textContent = u.created_at
+                ? 'Joined ' + new Date(u.created_at.replace(' ','T')+'Z').toLocaleDateString(undefined, {year:'numeric', month:'long'})
+                : '';
+
+            // Connection status (not shown for own profile)
+            if (user.id != currentUser.id && connDiv && statusRes) {
+                const connData = await statusRes.json();
+                const status   = connData.status || 'none';
+                let connHtml   = '';
+
+                if (status === 'accepted') {
+                    connHtml = `
+                        <span style="color:#23a559;font-size:.85rem;font-weight:600">✓ Connected</span>
+                        <button onclick="connections.remove(${user.id})" 
+                            style="margin-left:8px;background:transparent;border:1px solid #4f545c;
+                                   color:#949ba4;border-radius:6px;padding:4px 10px;
+                                   font-size:.78rem;cursor:pointer">Remove</button>`;
+                    if (dmBtn) {
+                        dmBtn.style.display = 'block';
+                        dmBtn.onclick = () => {
+                            modal.style.display = 'none';
+                            dm.openConversation(user.id, user.username, u.avatar);
+                        };
+                    }
+                } else if (status === 'pending_sent') {
+                    connHtml = `<span style="color:#f0b232;font-size:.85rem">⏳ Request sent</span>`;
+                } else if (status === 'pending_received') {
+                    connHtml = `<span style="color:#f0b232;font-size:.85rem">📩 Wants to connect</span>
+                        <button onclick="connections.acceptFromProfile(${user.id})"
+                            style="margin-left:8px;background:#23a559;color:#fff;border:none;
+                                   border-radius:6px;padding:4px 12px;font-size:.78rem;cursor:pointer;font-weight:600">Accept</button>`;
+                } else {
+                    connHtml = `<button onclick="connections.request(${user.id})"
+                        style="background:#5865f2;color:#fff;border:none;border-radius:6px;
+                               padding:6px 16px;font-size:.85rem;font-weight:600;cursor:pointer">
+                        + Connect</button>`;
+                }
+                connDiv.innerHTML = connHtml;
+            }
+        } catch (_) {
+            bioEl.textContent = user.bio || 'No bio yet.';
+        }
+    }
+
+        // Hide DM button for self
+        if (user.id == currentUser.id) {
+            dmBtn.style.display = 'none';
+        } else {
+            dmBtn.style.display = 'block';
+            dmBtn.onclick = () => {
+                modal.style.display = 'none';
+                dm.openConversation(user.id, user.username, user.avatar);
+            };
+        }
+
+        modal.style.display = 'block';
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -933,16 +1188,19 @@ class CommunityApp {
 
     async saveSettings() {
         const data = {
-            username:         document.getElementById('settings-username').value.trim(),
-            phone:            document.getElementById('settings-phone').value.trim(),
-            current_password: document.getElementById('settings-current-password').value,
-            new_password:     document.getElementById('settings-new-password').value,
+            username:           document.getElementById('settings-username').value.trim(),
+            phone:              document.getElementById('settings-phone').value.trim(),
+            avatar_visibility:  document.getElementById('settings-avatar-visibility').value,
+            current_password:   document.getElementById('settings-current-password').value,
+            new_password:       document.getElementById('settings-new-password').value,
         };
-        // Also send bio if present
         const bioEl = document.getElementById('settings-bio');
         if (bioEl) data.bio = bioEl.value;
 
-        Object.keys(data).forEach(k => { if (data[k] === '' || data[k] === undefined) delete data[k]; });
+        // Remove empty strings but keep avatar_visibility always
+        Object.keys(data).forEach(k => {
+            if (k !== 'avatar_visibility' && k !== 'bio' && (data[k] === '' || data[k] === undefined)) delete data[k];
+        });
 
         try {
             const response = await fetch('api/users.php', {
@@ -1140,38 +1398,56 @@ class CommunityApp {
         tbody.innerHTML = '';
 
         const statusColor = { active: '#23a559', muted: '#f0b232', banned: '#ed4245', restricted: '#949ba4' };
+        const statusDesc  = {
+            active:     'Full access',
+            muted:      'Read only — cannot send messages',
+            restricted: 'Public channels only — no DMs or posting',
+            banned:     'No access — completely blocked',
+        };
 
         users.forEach(user => {
             const isSelf  = user.id == currentUser.id;
-            const actions = isSelf ? '<span style="color:#949ba4;font-size:.8rem">You</span>' : `
-                <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                    ${user.status === 'muted'
-                        ? `<button onclick="app.moderateUser(${user.id},'unmute')" class="mod-btn" style="background:#23a559">Unmute</button>`
-                        : `<button onclick="app.moderateUser(${user.id},'mute')"   class="mod-btn" style="background:#f0b232;color:#000">Mute</button>`}
-                    ${user.status === 'banned'
-                        ? `<button onclick="app.moderateUser(${user.id},'unban')"  class="mod-btn" style="background:#23a559">Unban</button>`
-                        : `<button onclick="app.moderateUser(${user.id},'ban')"    class="mod-btn" style="background:#ed4245">Ban</button>`}
-                    ${user.status === 'restricted'
-                        ? `<button onclick="app.moderateUser(${user.id},'unrestrict')" class="mod-btn" style="background:#5865f2">Unrestrict</button>`
-                        : `<button onclick="app.moderateUser(${user.id},'restrict')"   class="mod-btn" style="background:#949ba4">Restrict</button>`}
-                </div>`;
+            const isAdmin = user.role === 'admin';
 
+            let actions;
+            if (isSelf) {
+                actions = '<span style="color:#949ba4;font-size:.8rem">You</span>';
+            } else if (isAdmin) {
+                actions = '<span style="color:#949ba4;font-size:.8rem">Admin — cannot be moderated</span>';
+            } else {
+                actions = `<div style="display:flex;gap:5px;flex-wrap:wrap;">
+                    ${user.status === 'muted'
+                        ? `<button onclick="app.moderateUser(${user.id},'unmute')"  class="mod-btn" style="background:#23a559" title="Restore ability to send messages">Unmute</button>`
+                        : `<button onclick="app.moderateUser(${user.id},'mute')"    class="mod-btn" style="background:#f0b232;color:#1a1a1a" title="Prevent user from sending any messages">Mute</button>`}
+                    ${user.status === 'restricted'
+                        ? `<button onclick="app.moderateUser(${user.id},'unrestrict')" class="mod-btn" style="background:#5865f2" title="Restore full access">Unrestrict</button>`
+                        : `<button onclick="app.moderateUser(${user.id},'restrict')"   class="mod-btn" style="background:#4f545c" title="Limit to public channels only — no DMs or posting">Restrict</button>`}
+                    ${user.status === 'banned'
+                        ? `<button onclick="app.moderateUser(${user.id},'unban')"   class="mod-btn" style="background:#23a559" title="Restore full access">Unban</button>`
+                        : `<button onclick="app.moderateUser(${user.id},'ban')"     class="mod-btn" style="background:#ed4245" title="Completely block from the platform">Ban</button>`}
+                </div>`;
+            }
+
+            const statusLabel = user.status || 'active';
             const row = document.createElement('tr');
             row.style.borderBottom = '1px solid #3f4147';
             row.innerHTML = `
                 <td style="padding:10px;color:#fff;font-weight:500">${this.escapeHtml(user.username)}</td>
-                <td style="padding:10px;color:#949ba4">${this.escapeHtml(user.email || '-')}</td>
+                <td style="padding:10px;color:#949ba4;font-size:.82rem">${this.escapeHtml(user.email || '—')}</td>
                 <td style="padding:10px"><span class="role-badge role-${user.role}">${user.role}</span></td>
-                <td style="padding:10px"><span style="color:${statusColor[user.status]||'#949ba4'};font-weight:500;text-transform:capitalize">${user.status}</span></td>
-                <td style="padding:10px">${actions}</td>
-            `;
+                <td style="padding:10px">
+                    <span style="color:${statusColor[statusLabel]||'#949ba4'};font-weight:500;text-transform:capitalize"
+                          title="${statusDesc[statusLabel]||''}">${statusLabel}</span>
+                </td>
+                <td style="padding:10px">${actions}</td>`;
             tbody.appendChild(row);
         });
 
         if (!document.getElementById('mod-btn-style')) {
             const style = document.createElement('style');
             style.id = 'mod-btn-style';
-            style.textContent = `.mod-btn{border:none;padding:4px 10px;border-radius:4px;font-size:.78rem;cursor:pointer;color:#fff;font-weight:600;transition:opacity .15s}.mod-btn:hover{opacity:.85}`;
+            style.textContent = `.mod-btn{border:none;padding:5px 11px;border-radius:4px;font-size:.78rem;cursor:pointer;color:#fff;font-weight:600;transition:opacity .15s}.mod-btn:hover{opacity:.82}
+            .status-legend-item{font-size:.78rem;color:#949ba4;display:flex;align-items:center;gap:4px;cursor:help}`;
             document.head.appendChild(style);
         }
     }
@@ -1244,33 +1520,54 @@ class CommunityApp {
     // ══════════════════════════════════════════════════════════════════════════
 
     async createInvite() {
-        const form      = document.getElementById('create-invite-form');
-        const formData  = new FormData(form);
-        const inviteData = {
-            email:        formData.get('email'),
-            phone:        formData.get('phone'),
-            role:         formData.get('role'),
-            expiry_hours: formData.get('expiry_hours'),
+        const inviteType = document.querySelector('input[name="invite_type"]:checked')?.value || 'single';
+        const email      = document.getElementById('invite-email').value.trim();
+        const role       = document.getElementById('invite-role').value;
+        const hours      = document.getElementById('expiry-hours').value;
+
+        // Single invites require an email
+        if (inviteType === 'single' && !email) {
+            this.showNotification('Email is required for single-person invites.', 'error');
+            document.getElementById('invite-email').focus();
+            return;
+        }
+
+        const payload = {
+            invite_type:  inviteType,
+            email:        inviteType === 'single' ? email : null,
+            role,
+            expiry_hours: parseInt(hours),
         };
 
         try {
-            const response = await fetch('api/invites.php', {
+            const res  = await fetch('api/invites.php', {
                 method:  'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body:    JSON.stringify(inviteData),
+                body:    JSON.stringify(payload),
             });
-            const data = await response.json();
+            const data = await res.json();
             if (data.success) {
-                document.getElementById('invite-url').value        = data.invite_url;
-                document.getElementById('invite-code').value       = data.invite_code;
+                document.getElementById('invite-url').value = data.invite_url;
+                // Show hard expiry time in user's local timezone
+                const expiresLocal = new Date(data.expires_at.replace(' ', 'T') + 'Z').toLocaleString();
+                document.getElementById('invite-expires-display').textContent = expiresLocal;
                 document.getElementById('invite-result').style.display = 'block';
-                form.style.display = 'none';
+                document.getElementById('create-invite-form').style.display = 'none';
             } else {
                 this.showNotification('Failed: ' + data.message, 'error');
             }
         } catch (err) {
             this.showNotification('Error creating invite', 'error');
         }
+    }
+
+    resetInviteForm() {
+        document.getElementById('create-invite-form').reset();
+        document.getElementById('create-invite-form').style.display = 'block';
+        document.getElementById('invite-result').style.display      = 'none';
+        // Reset email field visibility
+        document.getElementById('invite-email-group').style.display = 'block';
+        document.getElementById('invite-email').required = true;
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -1711,3 +2008,584 @@ class DMManager {
 const dm = new DMManager();
 window.dm = dm;
 
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ConnectionsManager
+// ══════════════════════════════════════════════════════════════════════════════
+class ConnectionsManager {
+
+    constructor() {
+        this._pollInterval = null;
+        this.startPoll();
+    }
+
+    // ── Open connections modal ────────────────────────────────────────────────
+    open() {
+        document.getElementById('connections-modal').style.display = 'block';
+        this._bindTabs();
+        this._showTab('my-connections');
+    }
+
+    // ── Tab switching ─────────────────────────────────────────────────────────
+    _bindTabs() {
+        document.querySelectorAll('.conn-tab').forEach(btn => {
+            btn.onclick = () => this._showTab(btn.dataset.tab);
+        });
+        const search = document.getElementById('discover-search');
+        if (search) {
+            search.oninput = (e) => {
+                const term = e.target.value.toLowerCase();
+                document.querySelectorAll('#discover-list .conn-card').forEach(card => {
+                    card.style.display = card.dataset.name.includes(term) ? '' : 'none';
+                });
+            };
+        }
+    }
+
+    _showTab(tab) {
+        document.querySelectorAll('.conn-tab').forEach(btn => {
+            const active = btn.dataset.tab === tab;
+            btn.style.background = active ? '#5865f2' : 'transparent';
+            btn.style.color      = active ? '#fff'    : '#949ba4';
+        });
+        document.querySelectorAll('.conn-tab-content').forEach(el => {
+            el.style.display = el.id === `tab-${tab}` ? 'block' : 'none';
+        });
+        if (tab === 'my-connections') this.loadConnections();
+        if (tab === 'requests')        this.loadRequests();
+        if (tab === 'discover')        this.loadDiscover();
+    }
+
+    // ── Load my connections ───────────────────────────────────────────────────
+    async loadConnections() {
+        const el = document.getElementById('connections-list');
+        if (!el) return;
+        el.innerHTML = '<p style="color:#949ba4;grid-column:1/-1;text-align:center;padding:30px">Loading…</p>';
+        try {
+            const res  = await fetch('api/connections.php?list=1');
+            const data = await res.json();
+            if (!data.connections.length) {
+                el.innerHTML = '<p style="color:#949ba4;grid-column:1/-1;text-align:center;padding:30px">No connections yet. Discover people to connect!</p>';
+                return;
+            }
+            el.innerHTML = data.connections.map(u => `
+                <div class="conn-card" data-name="${this._esc(u.username).toLowerCase()}"
+                     style="background:#2b2d31;border-radius:10px;padding:14px;text-align:center">
+                    <img src="${this._esc(u.avatar)}" onerror="this.src='assets/images/default-avatar.png'"
+                         style="width:52px;height:52px;border-radius:50%;object-fit:cover;
+                                border:2px solid #5865f2;cursor:pointer;margin-bottom:8px"
+                         onclick="app.openProfile({id:${u.id},username:'${this._esc(u.username)}',role:'${u.role}',avatar:'${this._esc(u.avatar)}'})">
+                    <div style="font-weight:600;color:#fff;font-size:.88rem;margin-bottom:4px">${this._esc(u.username)}</div>
+                    <div style="margin-bottom:10px"><span class="role-badge role-${u.role}">${u.role}</span></div>
+                    <div style="display:flex;gap:6px;justify-content:center">
+                        <button onclick="dm.openConversation(${u.id},'${this._esc(u.username)}','${this._esc(u.avatar)}')"
+                                style="background:#5865f2;color:#fff;border:none;border-radius:6px;
+                                       padding:5px 12px;font-size:.78rem;font-weight:600;cursor:pointer">
+                            💬 Message
+                        </button>
+                        <button onclick="connections.remove(${u.id})"
+                                style="background:transparent;border:1px solid #4f545c;color:#949ba4;
+                                       border-radius:6px;padding:5px 10px;font-size:.78rem;cursor:pointer">
+                            Remove
+                        </button>
+                    </div>
+                </div>`).join('');
+        } catch (e) { el.innerHTML = '<p style="color:#ed4245;text-align:center;padding:20px">Error loading connections.</p>'; }
+    }
+
+    // ── Load incoming requests ────────────────────────────────────────────────
+    async loadRequests() {
+        const el = document.getElementById('requests-list');
+        if (!el) return;
+        el.innerHTML = '<p style="color:#949ba4;text-align:center;padding:30px">Loading…</p>';
+        try {
+            const res  = await fetch('api/connections.php?requests=1');
+            const data = await res.json();
+            this._updateRequestsBadge(data.requests.length);
+            if (!data.requests.length) {
+                el.innerHTML = '<p style="color:#949ba4;text-align:center;padding:30px">No pending requests.</p>';
+                return;
+            }
+            el.innerHTML = data.requests.map(r => `
+                <div style="display:flex;align-items:center;gap:12px;padding:12px;
+                            background:#2b2d31;border-radius:10px;margin-bottom:8px">
+                    <img src="${this._esc(r.avatar)}" onerror="this.src='assets/images/default-avatar.png'"
+                         style="width:44px;height:44px;border-radius:50%;object-fit:cover;border:2px solid #5865f2">
+                    <div style="flex:1">
+                        <div style="font-weight:600;color:#fff">${this._esc(r.username)}</div>
+                        <div><span class="role-badge role-${r.role}">${r.role}</span></div>
+                    </div>
+                    <div style="display:flex;gap:6px">
+                        <button onclick="connections.accept(${r.request_id})"
+                                style="background:#23a559;color:#fff;border:none;border-radius:6px;
+                                       padding:6px 14px;font-size:.82rem;font-weight:600;cursor:pointer">
+                            Accept
+                        </button>
+                        <button onclick="connections.decline(${r.request_id})"
+                                style="background:transparent;border:1px solid #4f545c;color:#949ba4;
+                                       border-radius:6px;padding:6px 12px;font-size:.82rem;cursor:pointer">
+                            Decline
+                        </button>
+                    </div>
+                </div>`).join('');
+        } catch (e) { el.innerHTML = '<p style="color:#ed4245;text-align:center;padding:20px">Error loading requests.</p>'; }
+    }
+
+    // ── Discover people ───────────────────────────────────────────────────────
+    async loadDiscover() {
+        const el = document.getElementById('discover-list');
+        if (!el) return;
+        el.innerHTML = '<p style="color:#949ba4;grid-column:1/-1;text-align:center;padding:30px">Loading…</p>';
+        try {
+            const res  = await fetch('api/connections.php?people=1');
+            const data = await res.json();
+            if (!data.people.length) {
+                el.innerHTML = '<p style="color:#949ba4;grid-column:1/-1;text-align:center;padding:30px">You\'re connected with everyone!</p>';
+                return;
+            }
+            el.innerHTML = data.people.map(u => `
+                <div class="conn-card" data-name="${this._esc(u.username).toLowerCase()}"
+                     style="background:#2b2d31;border-radius:10px;padding:14px;text-align:center">
+                    <img src="${this._esc(u.avatar)}" onerror="this.src='assets/images/default-avatar.png'"
+                         style="width:52px;height:52px;border-radius:50%;object-fit:cover;
+                                border:2px solid #4f545c;margin-bottom:8px;cursor:pointer"
+                         onclick="app.openProfile({id:${u.id},username:'${this._esc(u.username)}',role:'${u.role}',avatar:'${this._esc(u.avatar)}'})">
+                    <div style="font-weight:600;color:#fff;font-size:.88rem;margin-bottom:4px">${this._esc(u.username)}</div>
+                    <div style="color:#949ba4;font-size:.76rem;margin-bottom:10px;
+                                overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+                                padding:0 4px">${this._esc(u.bio || 'No bio yet')}</div>
+                    <button onclick="connections.request(${u.id})"
+                            style="background:#5865f2;color:#fff;border:none;border-radius:6px;
+                                   padding:6px 16px;font-size:.82rem;font-weight:600;cursor:pointer;width:100%">
+                        + Connect
+                    </button>
+                </div>`).join('');
+        } catch (e) { el.innerHTML = '<p style="color:#ed4245;text-align:center;padding:20px">Error loading people.</p>'; }
+    }
+
+    // ── Actions ───────────────────────────────────────────────────────────────
+    async request(userId) {
+        try {
+            const res  = await fetch('api/connections.php', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ action: 'request', user_id: userId }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                app.showNotification('Connection request sent!', 'success');
+                this.loadDiscover();
+            } else {
+                app.showNotification(data.message, 'error');
+            }
+        } catch (e) { app.showNotification('Error sending request', 'error'); }
+    }
+
+    async accept(requestId) {
+        try {
+            const res  = await fetch('api/connections.php', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ action: 'accept', request_id: requestId }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                app.showNotification('Connection accepted!', 'success');
+                this.loadRequests();
+            } else {
+                app.showNotification(data.message, 'error');
+            }
+        } catch (e) { app.showNotification('Error accepting request', 'error'); }
+    }
+
+    // Called from profile modal when there's a pending_received request
+    async acceptFromProfile(userId) {
+        try {
+            const res  = await fetch(`api/connections.php?requests=1`);
+            const data = await res.json();
+            const req  = data.requests.find(r => r.id == userId);
+            if (req) await this.accept(req.request_id);
+            else app.showNotification('Request not found', 'error');
+        } catch (e) { app.showNotification('Error', 'error'); }
+    }
+
+    async decline(requestId) {
+        try {
+            const res  = await fetch('api/connections.php', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ action: 'decline', request_id: requestId }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                app.showNotification('Request declined.', 'success');
+                this.loadRequests();
+            }
+        } catch (e) { app.showNotification('Error declining request', 'error'); }
+    }
+
+    async remove(userId) {
+        if (!confirm('Remove this connection?')) return;
+        try {
+            const res  = await fetch('api/connections.php', {
+                method: 'DELETE', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ user_id: userId }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                app.showNotification('Connection removed.', 'success');
+                this.loadConnections();
+                document.getElementById('profile-modal').style.display = 'none';
+            }
+        } catch (e) { app.showNotification('Error removing connection', 'error'); }
+    }
+
+    // ── Badge polling ─────────────────────────────────────────────────────────
+    startPoll() {
+        this._checkBadge();
+        this._pollInterval = setInterval(() => this._checkBadge(), 20000);
+    }
+
+    async _checkBadge() {
+        try {
+            const res  = await fetch('api/connections.php?requests=1');
+            const data = await res.json();
+            this._updateRequestsBadge(data.requests?.length || 0);
+        } catch (_) {}
+    }
+
+    _updateRequestsBadge(count) {
+        const sidebarBadge = document.getElementById('conn-requests-badge');
+        const modalBadge   = document.getElementById('requests-badge');
+        [sidebarBadge, modalBadge].forEach(el => {
+            if (!el) return;
+            if (count > 0) { el.textContent = count; el.style.display = 'inline'; }
+            else             el.style.display = 'none';
+        });
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+    _esc(str) {
+        return String(str || '').replace(/'/g,"&#39;").replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+}
+
+// ── Bootstrap Connections ─────────────────────────────────────────────────────
+const connections = new ConnectionsManager();
+window.connections = connections;
+
+// ══════════════════════════════════════════════════════════════════════════════
+// GroupChatsManager — informal private group chats
+// ══════════════════════════════════════════════════════════════════════════════
+class GroupChatsManager {
+
+    constructor() {
+        this.activeGroupId   = null;
+        this.activeGroupName = null;
+        this.pollInterval    = null;
+        this._bindDmTabs();
+    }
+
+    // ── Wire the DM list modal tabs ───────────────────────────────────────────
+    _bindDmTabs() {
+        document.addEventListener('click', (e) => {
+            const btn = e.target.closest('.dm-main-tab');
+            if (!btn) return;
+            const tab = btn.dataset.tab;
+            document.querySelectorAll('.dm-main-tab').forEach(b => {
+                b.style.background = b.dataset.tab === tab ? '#5865f2' : 'transparent';
+                b.style.color      = b.dataset.tab === tab ? '#fff'    : '#949ba4';
+            });
+            document.getElementById('dm-tab-dms').style.display    = tab === 'dms'    ? 'block' : 'none';
+            document.getElementById('dm-tab-groups').style.display = tab === 'groups' ? 'block' : 'none';
+            if (tab === 'groups') this.loadGroupList();
+        });
+    }
+
+    // ── Group list ────────────────────────────────────────────────────────────
+    async loadGroupList() {
+        const el = document.getElementById('group-chats-list');
+        if (!el) return;
+        el.innerHTML = '<p class="dm-conv-empty">Loading…</p>';
+        try {
+            const res  = await fetch('api/group_chats.php?list=1');
+            const data = await res.json();
+            const groups = data.groups || [];
+            if (!groups.length) {
+                el.innerHTML = '<p class="dm-conv-empty">No group chats yet. Create one!</p>';
+                return;
+            }
+            el.innerHTML = '';
+            groups.forEach(g => {
+                const item = document.createElement('div');
+                item.className = 'dm-conv-item';
+                const unread = g.unread_count > 0
+                    ? `<span class="dm-conv-unread">${g.unread_count}</span>` : '';
+                item.innerHTML = `
+                    <div class="dm-conv-avatar" style="background:#5865f2;border-radius:50%;
+                         width:40px;height:40px;display:flex;align-items:center;justify-content:center;
+                         font-size:1.1rem;flex-shrink:0">👥</div>
+                    <div class="dm-conv-info">
+                        <div class="dm-conv-name">${this._esc(g.name)}</div>
+                        <div class="dm-conv-last">${this._esc(g.last_message || 'No messages yet')}</div>
+                    </div>
+                    ${unread}`;
+                item.addEventListener('click', () => this.openGroup(g.id, g.name));
+                el.appendChild(item);
+            });
+        } catch (e) { el.innerHTML = '<p class="dm-conv-empty">Error loading groups.</p>'; }
+    }
+
+    // ── Open a group conversation ─────────────────────────────────────────────
+    async openGroup(groupId, groupName) {
+        this.activeGroupId   = groupId;
+        this.activeGroupName = groupName;
+        document.getElementById('group-chat-title').textContent = groupName;
+        document.getElementById('group-messages').innerHTML     = '<p style="color:#949ba4;text-align:center;padding:20px">Loading…</p>';
+        document.getElementById('dm-list-modal').style.display  = 'none';
+        document.getElementById('group-chat-modal').style.display = 'block';
+
+        await this._loadMessages();
+        this._startPoll();
+    }
+
+    async _loadMessages() {
+        try {
+            const res  = await fetch(`api/group_chats.php?messages=${this.activeGroupId}`);
+            const data = await res.json();
+            if (!data.success) return;
+
+            // Update member count
+            const members = data.members || [];
+            document.getElementById('group-member-count').textContent = `${members.length} members`;
+            document.getElementById('group-chat-modal').dataset.isCreator =
+                (data.group.created_by == currentUser.id) ? '1' : '0';
+            document.getElementById('group-chat-modal').dataset.groupId = this.activeGroupId;
+
+            const container = document.getElementById('group-messages');
+            const wasBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 60;
+
+            const msgs = data.messages || [];
+            if (!msgs.length) {
+                container.innerHTML = '<p style="color:#949ba4;text-align:center;padding:20px">No messages yet. Say hello!</p>';
+                return;
+            }
+
+            container.innerHTML = '';
+            msgs.forEach(m => container.appendChild(this._createMsgEl(m)));
+            if (wasBottom || true) container.scrollTop = container.scrollHeight;
+        } catch (e) { console.error('Group load error', e); }
+    }
+
+    _createMsgEl(m) {
+        const isMine = m.sender_id == currentUser.id;
+        const div    = document.createElement('div');
+        div.className = `dm-msg ${isMine ? 'dm-sent' : 'dm-received'}`;
+        const ts  = m.created_at ? new Date(m.created_at.replace(' ','T')+'Z').toLocaleString([],{hour:'2-digit',minute:'2-digit'}) : '';
+        const del = (!m.is_deleted && isMine)
+            ? `<button class="dm-msg-delete-btn" onclick="groupChats.deleteMessage(${m.id})">✕</button>` : '';
+        div.innerHTML = `
+            <img class="dm-msg-avatar" src="${this._esc(m.sender_avatar)}"
+                 onerror="this.src='assets/images/default-avatar.png'">
+            <div class="dm-msg-meta">
+                ${!isMine ? `<span style="color:#949ba4;font-size:.72rem;padding:0 3px">${this._esc(m.sender_username)}</span>` : ''}
+                <div class="dm-msg-bubble" style="${m.is_deleted?'opacity:.5':''}">
+                    ${this._esc(m.content)}
+                    ${del}
+                </div>
+                <span class="dm-msg-time">${ts}</span>
+            </div>`;
+        return div;
+    }
+
+    // ── Send message ──────────────────────────────────────────────────────────
+    async sendMessage() {
+        const input   = document.getElementById('group-message-input');
+        const content = input.value.trim();
+        if (!content || !this.activeGroupId) return;
+        input.value = '';
+        try {
+            const res  = await fetch('api/group_chats.php', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ action: 'send', group_id: this.activeGroupId, content }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                const container = document.getElementById('group-messages');
+                container.appendChild(this._createMsgEl(data.message));
+                container.scrollTop = container.scrollHeight;
+            } else {
+                app.showNotification(data.message, 'error');
+            }
+        } catch (e) { app.showNotification('Error sending message', 'error'); }
+    }
+
+    async deleteMessage(msgId) {
+        try {
+            const res  = await fetch('api/group_chats.php', {
+                method: 'DELETE', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ message_id: msgId }),
+            });
+            const data = await res.json();
+            if (data.success) this._loadMessages();
+        } catch (e) {}
+    }
+
+    // ── Create group ──────────────────────────────────────────────────────────
+    async openCreateGroup() {
+        document.getElementById('group-name-input').value = '';
+        document.getElementById('create-group-modal').style.display = 'block';
+        await this._loadConnectionPicker('group-member-picker', []);
+    }
+
+    async _loadConnectionPicker(containerId, exclude) {
+        const el = document.getElementById(containerId);
+        el.innerHTML = '<p style="color:#949ba4;text-align:center;padding:16px">Loading…</p>';
+        try {
+            const res  = await fetch('api/connections.php?list=1');
+            const data = await res.json();
+            const conns = (data.connections || []).filter(c => !exclude.includes(c.id));
+            if (!conns.length) {
+                el.innerHTML = '<p style="color:#949ba4;text-align:center;padding:12px">No connections available.</p>';
+                return;
+            }
+            el.innerHTML = conns.map(c => `
+                <label style="display:flex;align-items:center;gap:10px;padding:8px;
+                              border-radius:6px;cursor:pointer;transition:background .1s"
+                       onmouseover="this.style.background='#383a40'" onmouseout="this.style.background=''">
+                    <input type="checkbox" value="${c.id}" style="width:16px;height:16px;cursor:pointer">
+                    <img src="${this._esc(c.avatar)}" onerror="this.src='assets/images/default-avatar.png'"
+                         style="width:30px;height:30px;border-radius:50%;object-fit:cover">
+                    <span style="color:#fff;font-size:.88rem">${this._esc(c.username)}</span>
+                    <span class="role-badge role-${c.role}" style="margin-left:auto">${c.role}</span>
+                </label>`).join('');
+        } catch (e) { el.innerHTML = '<p style="color:#ed4245;text-align:center">Error loading.</p>'; }
+    }
+
+    async createGroup() {
+        const name    = document.getElementById('group-name-input').value.trim();
+        const checked = [...document.querySelectorAll('#group-member-picker input:checked')];
+        const members = checked.map(c => parseInt(c.value));
+
+        if (!name) { app.showNotification('Group name required', 'error'); return; }
+        if (!members.length) { app.showNotification('Select at least one member', 'error'); return; }
+
+        try {
+            const res  = await fetch('api/group_chats.php', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ action: 'create', name, members }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                app.showNotification('Group created!', 'success');
+                document.getElementById('create-group-modal').style.display = 'none';
+                this.openGroup(data.group_id, name);
+            } else {
+                app.showNotification(data.message, 'error');
+            }
+        } catch (e) { app.showNotification('Error creating group', 'error'); }
+    }
+
+    // ── Group info + add member ───────────────────────────────────────────────
+    async openGroupInfo() {
+        const groupId   = this.activeGroupId;
+        const isCreator = document.getElementById('group-chat-modal').dataset.isCreator === '1';
+        document.getElementById('group-info-title').textContent = this.activeGroupName;
+        document.getElementById('group-info-modal').style.display = 'block';
+
+        const res  = await fetch(`api/group_chats.php?messages=${groupId}`);
+        const data = await res.json();
+        const members = data.members || [];
+        const memberIds = members.map(m => m.id);
+
+        const membersEl = document.getElementById('group-info-members');
+        membersEl.innerHTML = `<div style="color:#949ba4;font-size:.78rem;font-weight:600;
+            text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Members</div>` +
+            members.map(m => `
+                <div style="display:flex;align-items:center;gap:10px;padding:8px;
+                            background:#2b2d31;border-radius:8px;margin-bottom:6px">
+                    <img src="${this._esc(m.avatar)}" onerror="this.src='assets/images/default-avatar.png'"
+                         style="width:32px;height:32px;border-radius:50%;object-fit:cover">
+                    <span style="flex:1;color:#fff;font-size:.88rem">${this._esc(m.username)}</span>
+                    <span class="role-badge role-${m.role}">${m.role}</span>
+                </div>`).join('');
+
+        const addSection = document.getElementById('group-add-member-section');
+        if (isCreator) {
+            addSection.style.display = 'block';
+            await this._loadConnectionPicker('group-add-picker', memberIds);
+            // Replace checkboxes with Add buttons
+            document.querySelectorAll('#group-add-picker input[type=checkbox]').forEach(chk => {
+                const btn = document.createElement('button');
+                btn.textContent = '+ Add';
+                btn.style.cssText = 'background:#23a559;color:#fff;border:none;border-radius:6px;padding:4px 10px;font-size:.78rem;cursor:pointer;font-weight:600;margin-left:auto';
+                btn.onclick = () => this._addMember(groupId, parseInt(chk.value));
+                chk.parentElement.replaceChild(btn, chk);
+            });
+        } else {
+            addSection.style.display = 'none';
+        }
+    }
+
+    async _addMember(groupId, userId) {
+        try {
+            const res  = await fetch('api/group_chats.php', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ action: 'add_member', group_id: groupId, user_id: userId }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                app.showNotification('Member added!', 'success');
+                this.openGroupInfo();
+            } else {
+                app.showNotification(data.message, 'error');
+            }
+        } catch (e) { app.showNotification('Error adding member', 'error'); }
+    }
+
+    async leaveGroup() {
+        if (!confirm('Leave this group? You won\'t be able to see its messages anymore.')) return;
+        try {
+            const res  = await fetch('api/group_chats.php', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ action: 'leave', group_id: this.activeGroupId }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                app.showNotification('Left group.', 'success');
+                this.backToList();
+            }
+        } catch (e) { app.showNotification('Error', 'error'); }
+    }
+
+    backToList() {
+        this._stopPoll();
+        document.getElementById('group-chat-modal').style.display = 'none';
+        document.getElementById('dm-list-modal').style.display    = 'block';
+        // Switch to groups tab
+        document.querySelectorAll('.dm-main-tab').forEach(b => {
+            b.style.background = b.dataset.tab === 'groups' ? '#5865f2' : 'transparent';
+            b.style.color      = b.dataset.tab === 'groups' ? '#fff'    : '#949ba4';
+        });
+        document.getElementById('dm-tab-dms').style.display    = 'none';
+        document.getElementById('dm-tab-groups').style.display = 'block';
+        this.loadGroupList();
+    }
+
+    // ── Polling ───────────────────────────────────────────────────────────────
+    _startPoll() {
+        this._stopPoll();
+        this.pollInterval = setInterval(() => this._loadMessages(), 3000);
+    }
+
+    _stopPoll() {
+        if (this.pollInterval) { clearInterval(this.pollInterval); this.pollInterval = null; }
+    }
+
+    _esc(str) {
+        const d = document.createElement('div');
+        d.appendChild(document.createTextNode(String(str||'')));
+        return d.innerHTML;
+    }
+}
+
+// ── Bootstrap GroupChats ──────────────────────────────────────────────────────
+const groupChats = new GroupChatsManager();
+window.groupChats = groupChats;

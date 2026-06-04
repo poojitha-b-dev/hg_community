@@ -177,6 +177,22 @@ switch ($method) {
             exit;
         }
 
+        // Require connection — admin/mod can DM anyone
+        $isMod = $auth->hasPermission('moderate_users');
+        if (!$isMod) {
+            $connCheck = $db->prepare(
+                "SELECT id FROM connections
+                 WHERE ((requester_id = :me AND addressee_id = :r)
+                     OR (requester_id = :r2 AND addressee_id = :me2))
+                   AND status = 'accepted'"
+            );
+            $connCheck->execute([':me' => $myId, ':r' => $recipientId, ':r2' => $recipientId, ':me2' => $myId]);
+            if (!$connCheck->fetch()) {
+                echo json_encode(['success' => false, 'message' => 'You must be connected to message this person.']);
+                exit;
+            }
+        }
+
         // Check sender status
         $me      = dmCheckSender($db, $myId);
         $blocked = [

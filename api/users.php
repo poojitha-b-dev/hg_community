@@ -18,6 +18,26 @@ $method = $_SERVER['REQUEST_METHOD'];
 
 switch ($method) {
     case 'GET':
+        // Single user profile view
+        if (isset($_GET['profile'])) {
+            $profileId = (int)$_GET['profile'];
+            $stmt = $db->prepare(
+                "SELECT id, username, role, avatar, bio, avatar_visibility, created_at
+                 FROM users WHERE id = :id AND status != 'banned'"
+            );
+            $stmt->execute([':id' => $profileId]);
+            $u = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$u) {
+                echo json_encode(['success' => false, 'message' => 'User not found']);
+                exit;
+            }
+            if (empty($u['avatar']) || $u['avatar'] === 'default-avatar.png') {
+                $u['avatar'] = 'assets/images/default-avatar.png';
+            }
+            echo json_encode(['success' => true, 'user' => $u]);
+            exit;
+        }
+
         if (isset($_GET['online'])) {
             // Get online users (active in last 5 minutes)
             $query = "SELECT id, username, role, avatar, status 
@@ -127,31 +147,35 @@ switch ($method) {
             $params = [':id' => $_SESSION['user_id']];
 
             if (!empty($data['username'])) {
-                $newUsername = trim($data['username']);
-                // Enforce format: a-z, 0-9, dot, underscore, 3-30 chars
-                if (!preg_match('/^[a-z0-9._]{3,30}$/', $newUsername)) {
-                    echo json_encode(['success' => false, 'message' => 'Username must be 3–30 characters and contain only a-z, 0-9, . or _']);
-                    exit;
-                }
-                // Check uniqueness
+                // Check unique
                 $chk = $db->prepare("SELECT id FROM users WHERE username = :u AND id != :id");
-                $chk->execute([':u' => $newUsername, ':id' => $_SESSION['user_id']]);
+                $chk->execute([':u' => $data['username'], ':id' => $_SESSION['user_id']]);
                 if ($chk->rowCount() > 0) {
                     echo json_encode(['success' => false, 'message' => 'Username already taken']);
                     exit;
                 }
                 $fields[] = 'username = :username';
-                $params[':username'] = $newUsername;
+                $params[':username'] = $data['username'];
             }
-
-            // Email is locked — cannot be changed after account creation
             if (!empty($data['email'])) {
-                echo json_encode(['success' => false, 'message' => 'Email cannot be changed after registration.']);
-                exit;
+                $chk = $db->prepare("SELECT id FROM users WHERE email = :e AND id != :id");
+                $chk->execute([':e' => $data['email'], ':id' => $_SESSION['user_id']]);
+                if ($chk->rowCount() > 0) {
+                    echo json_encode(['success' => false, 'message' => 'Email already in use']);
+                    exit;
+                }
+                $fields[] = 'email = :email';
+                $params[':email'] = $data['email'];
             }
             if (!empty($data['phone'])) {
                 $fields[] = 'phone = :phone';
                 $params[':phone'] = $data['phone'];
+            }
+            // Avatar visibility
+            $validVisibility = ['everyone', 'connections', 'nobody'];
+            if (!empty($data['avatar_visibility']) && in_array($data['avatar_visibility'], $validVisibility)) {
+                $fields[] = 'avatar_visibility = :avatar_visibility';
+                $params[':avatar_visibility'] = $data['avatar_visibility'];
             }
             // Bio may be intentionally emptied — use isset rather than !empty
             if (isset($data['bio'])) {
