@@ -1043,9 +1043,15 @@ class CommunityApp {
             const response = await fetch('api/messages.php?unread=1');
             const data     = await response.json();
             if (data.success) {
+                let totalUnread = 0;
                 Object.entries(data.unread).forEach(([channelId, count]) => {
                     this.updateUnreadBadge(channelId, count);
+                    totalUnread += count;
                 });
+                // Update browser tab title
+                document.title = totalUnread > 0
+                    ? `(${totalUnread}) HG Community`
+                    : 'HG Community';
             }
         } catch (_) {}
     }
@@ -1187,20 +1193,36 @@ class CommunityApp {
     // ══════════════════════════════════════════════════════════════════════════
 
     async saveSettings() {
-        const data = {
-            username:           document.getElementById('settings-username').value.trim(),
-            phone:              document.getElementById('settings-phone').value.trim(),
-            avatar_visibility:  document.getElementById('settings-avatar-visibility').value,
-            current_password:   document.getElementById('settings-current-password').value,
-            new_password:       document.getElementById('settings-new-password').value,
-        };
-        const bioEl = document.getElementById('settings-bio');
-        if (bioEl) data.bio = bioEl.value;
+        const usernameVal  = document.getElementById('settings-username').value.trim();
+        const phoneVal     = document.getElementById('settings-phone').value.trim();
+        const bioEl        = document.getElementById('settings-bio');
+        const visibilityEl = document.getElementById('settings-avatar-visibility');
+        const currentPw    = document.getElementById('settings-current-password').value;
+        const newPw        = document.getElementById('settings-new-password').value;
 
-        // Remove empty strings but keep avatar_visibility always
-        Object.keys(data).forEach(k => {
-            if (k !== 'avatar_visibility' && k !== 'bio' && (data[k] === '' || data[k] === undefined)) delete data[k];
-        });
+        // Validate username format if user typed one
+        if (usernameVal && !/^[a-z0-9._]{3,30}$/.test(usernameVal)) {
+            this.showNotification('Username must be 3–30 chars, only a–z 0–9 . _', 'error');
+            document.getElementById('settings-username').focus();
+            return;
+        }
+
+        // Validate passwords if user is trying to change password
+        if (newPw && !currentPw) {
+            this.showNotification('Current password is required to set a new one.', 'error');
+            return;
+        }
+        if (newPw && newPw.length < 8) {
+            this.showNotification('New password must be at least 8 characters.', 'error');
+            return;
+        }
+
+        const data = { avatar_visibility: visibilityEl?.value || 'everyone' };
+        if (usernameVal)  data.username         = usernameVal;
+        if (phoneVal)     data.phone            = phoneVal;
+        if (bioEl)        data.bio              = bioEl.value; // allow empty to clear bio
+        if (currentPw)    data.current_password = currentPw;
+        if (newPw)        data.new_password     = newPw;
 
         try {
             const response = await fetch('api/users.php', {
@@ -2062,20 +2084,38 @@ class ConnectionsManager {
         if (!el) return;
         el.innerHTML = '<p style="color:#949ba4;grid-column:1/-1;text-align:center;padding:30px">Loading…</p>';
         try {
-            const res  = await fetch('api/connections.php?list=1');
-            const data = await res.json();
+            const [connRes, presRes] = await Promise.all([
+                fetch('api/connections.php?list=1'),
+                fetch('api/presence.php'),
+            ]);
+            const data     = await connRes.json();
+            const presData = await presRes.json();
+            const onlineIds = new Set((presData.online || []).map(u => u.id));
+
             if (!data.connections.length) {
                 el.innerHTML = '<p style="color:#949ba4;grid-column:1/-1;text-align:center;padding:30px">No connections yet. Discover people to connect!</p>';
                 return;
             }
-            el.innerHTML = data.connections.map(u => `
+            el.innerHTML = data.connections.map(u => {
+                const isOnline  = onlineIds.has(u.id);
+                const onlineDot = isOnline
+                    ? `<span style="display:inline-block;width:10px;height:10px;background:#23a559;
+                                   border-radius:50%;border:2px solid #2b2d31;margin-right:4px"></span>`
+                    : '';
+                return `
                 <div class="conn-card" data-name="${this._esc(u.username).toLowerCase()}"
                      style="background:#2b2d31;border-radius:10px;padding:14px;text-align:center">
-                    <img src="${this._esc(u.avatar)}" onerror="this.src='assets/images/default-avatar.png'"
-                         style="width:52px;height:52px;border-radius:50%;object-fit:cover;
-                                border:2px solid #5865f2;cursor:pointer;margin-bottom:8px"
-                         onclick="app.openProfile({id:${u.id},username:'${this._esc(u.username)}',role:'${u.role}',avatar:'${this._esc(u.avatar)}'})">
-                    <div style="font-weight:600;color:#fff;font-size:.88rem;margin-bottom:4px">${this._esc(u.username)}</div>
+                    <div style="position:relative;display:inline-block;margin-bottom:8px">
+                        <img src="${this._esc(u.avatar)}" onerror="this.src='assets/images/default-avatar.png'"
+                             style="width:52px;height:52px;border-radius:50%;object-fit:cover;
+                                    border:2px solid ${isOnline ? '#23a559' : '#5865f2'};cursor:pointer"
+                             onclick="app.openProfile({id:${u.id},username:'${this._esc(u.username)}',role:'${u.role}',avatar:'${this._esc(u.avatar)}'})">
+                        ${isOnline ? `<span style="position:absolute;bottom:1px;right:1px;width:12px;height:12px;
+                            background:#23a559;border-radius:50%;border:2px solid #2b2d31"></span>` : ''}
+                    </div>
+                    <div style="font-weight:600;color:#fff;font-size:.88rem;margin-bottom:2px">
+                        ${onlineDot}${this._esc(u.username)}
+                    </div>
                     <div style="margin-bottom:10px"><span class="role-badge role-${u.role}">${u.role}</span></div>
                     <div style="display:flex;gap:6px;justify-content:center">
                         <button onclick="dm.openConversation(${u.id},'${this._esc(u.username)}','${this._esc(u.avatar)}')"
@@ -2089,7 +2129,8 @@ class ConnectionsManager {
                             Remove
                         </button>
                     </div>
-                </div>`).join('');
+                </div>`;
+            }).join('');
         } catch (e) { el.innerHTML = '<p style="color:#ed4245;text-align:center;padding:20px">Error loading connections.</p>'; }
     }
 
