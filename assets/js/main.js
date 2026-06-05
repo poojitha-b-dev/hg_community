@@ -461,6 +461,8 @@ class CommunityApp {
             }
         } catch (e) { this.showNotification('Error removing member', 'error'); }
     }
+
+    async loadMessages(isAutoRefresh = false) {
         if (!this.currentChannelId) return;
 
         try {
@@ -1009,20 +1011,6 @@ class CommunityApp {
         } catch (_) {
             bioEl.textContent = user.bio || 'No bio yet.';
         }
-    }
-
-        // Hide DM button for self
-        if (user.id == currentUser.id) {
-            dmBtn.style.display = 'none';
-        } else {
-            dmBtn.style.display = 'block';
-            dmBtn.onclick = () => {
-                modal.style.display = 'none';
-                dm.openConversation(user.id, user.username, user.avatar);
-            };
-        }
-
-        modal.style.display = 'block';
     }
 
     // ══════════════════════════════════════════════════════════════════════════
