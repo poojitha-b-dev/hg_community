@@ -9,6 +9,18 @@ if (!$auth->isLoggedIn()) {
 }
 
 $user = $auth->getCurrentUser();
+if (!$user) {
+    header('Location: login.php');
+    exit;
+}
+
+// Security headers
+header('X-Content-Type-Options: nosniff');
+header('X-Frame-Options: SAMEORIGIN');
+header('X-XSS-Protection: 1; mode=block');
+header('Referrer-Policy: strict-origin-when-cross-origin');
+
+$logoutToken = Auth::generateLogoutToken();
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -26,18 +38,24 @@ $user = $auth->getCurrentUser();
          LEFT SIDEBAR — Channels
     ════════════════════════════════════════════════════════════════════════ -->
     <div class="sidebar-left">
-        <div class="server-header">
-            <h2>HG Community</h2>
-            <div class="user-info">
-                <div class="avatar">
-                    <img src="<?php
-                        $av = $user['avatar'] ?? '';
-                        // Avatars uploaded via PATCH are stored as uploads/avatars/filename
-                        // Default avatar lives in assets/images/
-                        echo htmlspecialchars($av ?: 'assets/images/default-avatar.png');
-                    ?>"
-                         alt="Avatar"
+        <div class="server-header" id="server-header">
+            <div class="server-banner" id="server-banner" style="display:none">
+                <img id="server-banner-img" src="" alt="">
+            </div>
+            <div class="server-identity">
+                <div class="server-logo" id="server-logo-wrap">
+                    <img id="server-logo-img" src="assets/images/default-avatar.png" alt="Logo"
                          onerror="this.src='assets/images/default-avatar.png'">
+                </div>
+                <div>
+                    <h2 id="server-name">HG Community</h2>
+                    <p id="server-tagline" style="color:#949ba4;font-size:.75rem;margin:0"></p>
+                </div>
+            </div>
+            <div class="user-info">
+                <div class="avatar" style="cursor:pointer" onclick="app.openProfile({id:<?php echo $user['id'];?>,username:'<?php echo htmlspecialchars($user['username']);?>',role:'<?php echo $user['role'];?>',avatar:'<?php echo htmlspecialchars($user['avatar']??'');?>'})">
+                    <img src="<?php $av=$user['avatar']??''; echo htmlspecialchars($av?:'assets/images/default-avatar.png'); ?>"
+                         alt="Avatar" onerror="this.src='assets/images/default-avatar.png'">
                     <div class="status-indicator online"></div>
                 </div>
                 <span class="username"><?php echo htmlspecialchars($user['username']); ?></span>
@@ -68,14 +86,27 @@ $user = $auth->getCurrentUser();
         <div class="admin-panel">
             <button class="admin-panel-toggle" id="admin-panel-toggle">
                 <span>Admin Panel</span>
-                <span class="admin-toggle-icon">▲</span>
+                <span class="admin-toggle-icon">▼</span>
             </button>
             <div class="admin-controls" id="admin-controls" style="display:none">
-                <button id="create-channel-btn"  class="control-btn">＋ New Channel</button>
-                <button id="manage-channels-btn" class="control-btn">📋 Manage Channels</button>
-                <button id="create-invite-btn"   class="control-btn">🔗 Create Invite</button>
-                <button id="manage-invites-btn"  class="control-btn">📨 Manage Invites</button>
-                <button id="manage-users-btn"    class="control-btn">👥 Manage Users</button>
+                <button id="community-settings-btn" class="control-btn">🏠 Community Settings</button>
+                <button id="create-channel-btn"     class="control-btn">＋ New Channel</button>
+                <button id="manage-channels-btn"    class="control-btn">📋 Manage Channels</button>
+                <button id="create-invite-btn"      class="control-btn">🔗 Create Invite</button>
+                <button id="manage-invites-btn"     class="control-btn">📨 Manage Invites</button>
+                <button id="manage-users-btn"       class="control-btn">👥 Manage Users</button>
+            </div>
+        </div>
+        <?php elseif ($user['role'] === 'moderator'): ?>
+        <div class="admin-panel">
+            <button class="admin-panel-toggle" id="admin-panel-toggle">
+                <span>Moderator Panel</span>
+                <span class="admin-toggle-icon">▼</span>
+            </button>
+            <div class="admin-controls" id="admin-controls" style="display:none">
+                <button id="create-invite-btn"  class="control-btn">🔗 Create Invite</button>
+                <button id="manage-invites-btn" class="control-btn">📨 Manage Invites</button>
+                <button id="manage-users-btn"   class="control-btn">👥 Manage Users</button>
             </div>
         </div>
         <?php endif; ?>
@@ -90,7 +121,8 @@ $user = $auth->getCurrentUser();
                 <span id="dm-sidebar-badge" class="dm-sidebar-badge" style="display:none"></span>
             </button>
             <button id="settings-btn" class="control-btn">⚙️ Settings</button>
-            <button id="logout-btn"   class="control-btn">🚪 Logout</button>
+            <button id="logout-btn" class="control-btn"
+                    data-token="<?php echo htmlspecialchars($logoutToken); ?>">🚪 Logout</button>
         </div>
     </div>
 
@@ -115,6 +147,9 @@ $user = $auth->getCurrentUser();
                 <!-- Pinned messages -->
                 <button id="pinned-messages-btn" class="action-btn" title="Pinned messages" style="display:none">
                     📌 Pinned
+                </button>
+                <button id="channel-info-btn" class="action-btn" title="Channel info" style="display:none">
+                    ℹ️ Info
                 </button>
 
                 <?php if ($user['role'] === 'admin' || $user['role'] === 'moderator'): ?>
@@ -571,6 +606,101 @@ $user = $auth->getCurrentUser();
                     <tr><td colspan="7" style="text-align:center;padding:20px;color:#949ba4">Loading…</td></tr>
                 </tbody>
             </table>
+        </div>
+    </div>
+</div>
+
+<!-- Community Settings (Admin) -->
+<div id="community-settings-modal" class="modal">
+    <div class="modal-content" style="max-width:560px">
+        <span class="close">&times;</span>
+        <h2>🏠 Community Settings</h2>
+
+        <!-- Stats bar -->
+        <div id="community-stats" style="display:flex;gap:12px;flex-wrap:wrap;
+             background:#2b2d31;border-radius:8px;padding:12px 16px;margin-bottom:20px">
+            <div class="stat-item"><span id="stat-members">—</span><label>Members</label></div>
+            <div class="stat-item"><span id="stat-channels">—</span><label>Channels</label></div>
+            <div class="stat-item"><span id="stat-teams">—</span><label>Teams</label></div>
+            <div class="stat-item"><span id="stat-messages">—</span><label>Messages</label></div>
+        </div>
+
+        <!-- Logo upload -->
+        <div style="display:flex;gap:16px;align-items:flex-start;margin-bottom:16px">
+            <div>
+                <img id="community-logo-preview" src="assets/images/default-avatar.png"
+                     style="width:70px;height:70px;border-radius:12px;object-fit:cover;
+                            border:2px solid #4f545c">
+            </div>
+            <div style="flex:1">
+                <label style="display:block;color:#949ba4;font-size:.8rem;margin-bottom:6px">Community Logo</label>
+                <input type="file" id="logo-upload" accept="image/*"
+                       style="font-size:.82rem;color:#949ba4">
+            </div>
+        </div>
+
+        <!-- Banner upload -->
+        <div style="margin-bottom:16px">
+            <label style="display:block;color:#949ba4;font-size:.8rem;margin-bottom:6px">Banner Image</label>
+            <div id="community-banner-preview" style="width:100%;height:80px;background:#2b2d31;
+                 border-radius:8px;border:2px dashed #4f545c;overflow:hidden;margin-bottom:6px">
+                <img id="community-banner-img" src="" style="width:100%;height:100%;object-fit:cover;display:none">
+            </div>
+            <input type="file" id="banner-upload" accept="image/*"
+                   style="font-size:.82rem;color:#949ba4">
+        </div>
+
+        <form id="community-settings-form">
+            <div class="form-group">
+                <label>Community Name</label>
+                <input type="text" id="community-name" required
+                       style="width:100%;padding:9px 12px;background:#383a40;border:1px solid #4f545c;
+                              border-radius:6px;color:#fff;font-size:.9rem">
+            </div>
+            <div class="form-group" style="margin-top:10px">
+                <label>Tagline <span style="color:#949ba4;font-size:.78rem">(short description shown under logo)</span></label>
+                <input type="text" id="community-tagline" maxlength="80"
+                       style="width:100%;padding:9px 12px;background:#383a40;border:1px solid #4f545c;
+                              border-radius:6px;color:#fff;font-size:.9rem">
+            </div>
+            <div class="form-group" style="margin-top:10px">
+                <label>Description</label>
+                <textarea id="community-description" rows="3"
+                          style="width:100%;padding:9px 12px;background:#383a40;border:1px solid #4f545c;
+                                 border-radius:6px;color:#fff;font-size:.9rem;resize:vertical"></textarea>
+            </div>
+            <button type="submit"
+                    style="margin-top:14px;width:100%;padding:10px;background:#5865f2;color:#fff;
+                           border:none;border-radius:8px;font-size:.95rem;font-weight:600;cursor:pointer">
+                Save Settings
+            </button>
+        </form>
+    </div>
+</div>
+
+<!-- Channel Info Panel (slides in from right) -->
+<div id="channel-info-panel" style="display:none;position:fixed;top:0;right:0;width:300px;height:100vh;
+     background:#2b2d31;border-left:1px solid #3f4147;z-index:200;overflow-y:auto;
+     box-shadow:-4px 0 20px rgba(0,0,0,.4)">
+    <div style="padding:16px;border-bottom:1px solid #3f4147;display:flex;
+                align-items:center;justify-content:space-between">
+        <h3 id="channel-info-name" style="color:#fff;margin:0;font-size:1rem"></h3>
+        <button onclick="document.getElementById('channel-info-panel').style.display='none'"
+                style="background:none;border:none;color:#949ba4;font-size:1.2rem;cursor:pointer">✕</button>
+    </div>
+    <div style="padding:16px">
+        <div id="channel-info-type" style="margin-bottom:12px"></div>
+        <div id="channel-info-desc" style="color:#949ba4;font-size:.88rem;line-height:1.5;margin-bottom:16px"></div>
+        <div id="channel-info-stats" style="display:flex;gap:12px;margin-bottom:16px"></div>
+        <div id="channel-info-members-section" style="display:none">
+            <div style="color:#949ba4;font-size:.78rem;font-weight:600;text-transform:uppercase;
+                        letter-spacing:.5px;margin-bottom:8px">Team Members</div>
+            <div id="channel-info-members"></div>
+        </div>
+        <div id="channel-info-pinned-section" style="display:none;margin-top:16px">
+            <div style="color:#949ba4;font-size:.78rem;font-weight:600;text-transform:uppercase;
+                        letter-spacing:.5px;margin-bottom:8px">Pinned Messages</div>
+            <div id="channel-info-pinned"></div>
         </div>
     </div>
 </div>

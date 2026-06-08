@@ -7,9 +7,6 @@ require_once __DIR__ . '/../config/database.php';
 ob_clean();
 
 header('Content-Type: application/json');
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization');
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(200);
@@ -39,10 +36,54 @@ $method = $_SERVER['REQUEST_METHOD'];
 try {
     switch ($method) {
 
-        // ── GET: fetch channels ───────────────────────────────────────────────
+        // ── GET: channel info ─────────────────────────────────────────────────
         case 'GET':
             $userId = (int)$_SESSION['user_id'];
             $role   = $_SESSION['role'];
+
+            // Single channel info
+            if (isset($_GET['info'])) {
+                $chanId = (int)$_GET['info'];
+                $ch = $db->prepare(
+                    "SELECT c.*, u.username AS created_by_name,
+                            (SELECT COUNT(*) FROM messages m WHERE m.channel_id=c.id AND m.is_deleted=0) AS message_count,
+                            (SELECT COUNT(*) FROM messages m WHERE m.channel_id=c.id AND m.is_deleted=0 AND m.file_path IS NOT NULL) AS file_count
+                     FROM channels c LEFT JOIN users u ON c.created_by=u.id
+                     WHERE c.id=:id"
+                );
+                $ch->execute([':id' => $chanId]);
+                $info = $ch->fetch(PDO::FETCH_ASSOC);
+                if (!$info) { echo json_encode(['success'=>false,'message'=>'Not found']); exit; }
+
+                // Team members if applicable
+                $members = [];
+                if ($info['type'] === 'team') {
+                    $ms = $db->prepare(
+                        "SELECT u.id, u.username, u.role, u.avatar
+                         FROM team_members tm JOIN users u ON tm.user_id=u.id
+                         WHERE tm.channel_id=:cid ORDER BY u.username"
+                    );
+                    $ms->execute([':cid' => $chanId]);
+                    $members = $ms->fetchAll(PDO::FETCH_ASSOC);
+                }
+
+                // Pinned messages
+                $pins = $db->prepare(
+                    "SELECT m.id, m.content, u.username, m.created_at
+                     FROM messages m JOIN users u ON m.user_id=u.id
+                     WHERE m.channel_id=:cid AND m.is_pinned=1 AND m.is_deleted=0
+                     ORDER BY m.created_at DESC LIMIT 5"
+                );
+                $pins->execute([':cid' => $chanId]);
+
+                echo json_encode([
+                    'success' => true,
+                    'channel' => $info,
+                    'members' => $members,
+                    'pinned'  => $pins->fetchAll(PDO::FETCH_ASSOC),
+                ]);
+                exit;
+            }
 
             // Admins and moderators see all channels
             // Members only see: non-team channels + team channels they belong to

@@ -1,20 +1,34 @@
 <?php
-session_start();
+// ── Secure session cookie settings — must be set BEFORE session_start() ───────
+if (session_status() === PHP_SESSION_NONE) {
+    $isHttps = (!empty($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https')
+               || (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off');
+
+    session_set_cookie_params([
+        'lifetime' => 0,           // expires when browser closes
+        'path'     => '/',
+        'domain'   => '',
+        'secure'   => $isHttps,    // only send over HTTPS when on Railway
+        'httponly' => true,        // JS cannot read the cookie — blocks XSS session theft
+        'samesite' => 'Lax',       // blocks CSRF on cross-site requests
+    ]);
+    session_start();
+}
+
 require_once __DIR__ . '/../config/database.php';
 
 class Auth {
     private $db;
 
-    // ── Rate limiting constants ───────────────────────────────────────────────
-    const MAX_ATTEMPTS    = 5;    // max failed logins before lockout
-    const LOCKOUT_SECONDS = 900;  // 15 minutes
+    const MAX_ATTEMPTS    = 5;
+    const LOCKOUT_SECONDS = 900; // 15 minutes
 
     public function __construct() {
         $database = new Database();
         $this->db = $database->getConnection();
     }
 
-    // ── CSRF token helpers ────────────────────────────────────────────────────
+    // ── CSRF ──────────────────────────────────────────────────────────────────
     public static function generateCsrfToken(): string {
         if (empty($_SESSION['csrf_token'])) {
             $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
@@ -23,36 +37,35 @@ class Auth {
     }
 
     public static function verifyCsrfToken(string $token): bool {
-        return isset($_SESSION['csrf_token'])
+        return !empty($_SESSION['csrf_token'])
             && hash_equals($_SESSION['csrf_token'], $token);
     }
 
-    // ── Rate limiting helpers ─────────────────────────────────────────────────
+    // ── Rate limiting ─────────────────────────────────────────────────────────
     private function getRateLimitKey(string $identifier): string {
-        // Key per IP + username/email combo stored in session-adjacent PHP array
-        // We store attempt data in the DB so it survives across sessions/servers
-        return 'login_' . md5($identifier . $_SERVER['REMOTE_ADDR']);
+        return 'login_' . md5($identifier . ($_SERVER['REMOTE_ADDR'] ?? ''));
     }
 
     private function checkRateLimit(string $identifier): array {
         $key  = $this->getRateLimitKey($identifier);
         $stmt = $this->db->prepare(
-            "SELECT attempts, locked_until FROM login_attempts
-             WHERE attempt_key = :key"
+            "SELECT attempts, locked_until FROM login_attempts WHERE attempt_key = :key"
         );
         $stmt->execute([':key' => $key]);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+        $row = $stmt->fetch();
 
         if (!$row) return ['blocked' => false, 'attempts' => 0];
 
-        // Check if still locked
+        // Auto-expire old lockouts
+        if ($row['locked_until'] && strtotime($row['locked_until']) <= time()) {
+            $this->db->prepare("DELETE FROM login_attempts WHERE attempt_key = :key")
+                     ->execute([':key' => $key]);
+            return ['blocked' => false, 'attempts' => 0];
+        }
+
         if ($row['locked_until'] && strtotime($row['locked_until']) > time()) {
             $remaining = ceil((strtotime($row['locked_until']) - time()) / 60);
-            return [
-                'blocked'   => true,
-                'attempts'  => (int)$row['attempts'],
-                'remaining' => $remaining,
-            ];
+            return ['blocked' => true, 'attempts' => (int)$row['attempts'], 'remaining' => $remaining];
         }
 
         return ['blocked' => false, 'attempts' => (int)$row['attempts']];
@@ -60,61 +73,40 @@ class Auth {
 
     private function recordFailedAttempt(string $identifier): void {
         $key      = $this->getRateLimitKey($identifier);
-        $attempts = $this->checkRateLimit($identifier)['attempts'] + 1;
-        $lockUntil = $attempts >= self::MAX_ATTEMPTS
-            ? date('Y-m-d H:i:s', time() + self::LOCKOUT_SECONDS)
-            : null;
+        $current  = $this->checkRateLimit($identifier);
+        $attempts = $current['attempts'] + 1;
+        $lock     = $attempts >= self::MAX_ATTEMPTS
+            ? date('Y-m-d H:i:s', time() + self::LOCKOUT_SECONDS) : null;
 
         $this->db->prepare(
             "INSERT INTO login_attempts (attempt_key, attempts, locked_until, last_attempt)
              VALUES (:key, :att, :lock, NOW())
-             ON DUPLICATE KEY UPDATE
-                attempts     = :att2,
-                locked_until = :lock2,
-                last_attempt = NOW()"
-        )->execute([
-            ':key'   => $key,
-            ':att'   => $attempts, ':att2'  => $attempts,
-            ':lock'  => $lockUntil, ':lock2' => $lockUntil,
-        ]);
+             ON DUPLICATE KEY UPDATE attempts=:att2, locked_until=:lock2, last_attempt=NOW()"
+        )->execute([':key'=>$key, ':att'=>$attempts, ':att2'=>$attempts, ':lock'=>$lock, ':lock2'=>$lock]);
     }
 
     private function clearAttempts(string $identifier): void {
-        $key = $this->getRateLimitKey($identifier);
-        $this->db->prepare(
-            "DELETE FROM login_attempts WHERE attempt_key = :key"
-        )->execute([':key' => $key]);
+        $this->db->prepare("DELETE FROM login_attempts WHERE attempt_key = :key")
+                 ->execute([':key' => $this->getRateLimitKey($identifier)]);
     }
 
     // ── Login ─────────────────────────────────────────────────────────────────
     public function login(string $username, string $password): array {
-
-        // 1. Rate limit check
         $limit = $this->checkRateLimit($username);
         if ($limit['blocked']) {
-            return [
-                'success' => false,
-                'message' => "Too many failed attempts. Try again in {$limit['remaining']} minute(s).",
-            ];
+            return ['success' => false,
+                    'message' => "Too many failed attempts. Try again in {$limit['remaining']} minute(s)."];
         }
 
-        // 2. Fetch user
         $stmt = $this->db->prepare(
-            "SELECT id, username, email, password, role, status
-             FROM users WHERE username = :u OR email = :u"
+            "SELECT id, username, email, password, role, status FROM users
+             WHERE (username = :u OR email = :u) AND status != 'banned'"
         );
         $stmt->execute([':u' => $username]);
 
         if ($stmt->rowCount() === 1) {
-            $row = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            if ($row['status'] === 'banned') {
-                $this->recordFailedAttempt($username);
-                return ['success' => false, 'message' => 'Your account has been banned.'];
-            }
-
+            $row = $stmt->fetch();
             if (password_verify($password, $row['password'])) {
-                // Success — clear attempts, regenerate session
                 $this->clearAttempts($username);
                 session_regenerate_id(true);
 
@@ -130,106 +122,139 @@ class Auth {
             }
         }
 
-        // Failed — record attempt
         $this->recordFailedAttempt($username);
-        $remaining = self::MAX_ATTEMPTS - ($this->checkRateLimit($username)['attempts']);
-        $warn = $remaining > 0
-            ? " ({$remaining} attempt(s) remaining before lockout)"
-            : '';
-        return ['success' => false, 'message' => 'Invalid credentials.' . $warn];
+        $limitAfter = $this->checkRateLimit($username);
+        $left = self::MAX_ATTEMPTS - $limitAfter['attempts'];
+        $warn = $left > 0 ? " ({$left} attempt(s) remaining)" : ' (Account locked for 15 minutes)';
+        return ['success' => false, 'message' => 'Invalid username or password.' . $warn];
     }
 
     // ── Register ──────────────────────────────────────────────────────────────
-    public function register($username, $email, $phone, $password, $inviteCode = null): array {
-
+    public function register(string $username, string $email, ?string $phone,
+                             string $password, ?string $inviteCode): array {
         if (empty(trim((string)$inviteCode))) {
             return ['success' => false, 'message' => 'An invite code is required to register.'];
         }
-
-        // Validate username format: a-z, 0-9, dot, underscore only
         if (!preg_match('/^[a-z0-9._]{3,30}$/', $username)) {
-            return ['success' => false, 'message' => 'Username must be 3–30 characters and contain only a-z, 0-9, . or _'];
+            return ['success' => false, 'message' => 'Username must be 3–30 characters: a–z, 0–9, . or _ only.'];
+        }
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            return ['success' => false, 'message' => 'Invalid email address.'];
+        }
+        if (strlen($password) < 8) {
+            return ['success' => false, 'message' => 'Password must be at least 8 characters.'];
         }
 
-        // Validate invite
-        $inviteStmt = $this->db->prepare(
+        // Validate invite — support both single and group
+        $inv = $this->db->prepare(
             "SELECT id, role, invite_type FROM invites
-             WHERE invite_code = :code
-               AND expires_at > NOW()
+             WHERE invite_code = :code AND expires_at > NOW()
                AND (used_at IS NULL OR invite_type = 'group')"
         );
-        $inviteStmt->execute([':code' => $inviteCode]);
-
-        if ($inviteStmt->rowCount() === 0) {
+        $inv->execute([':code' => $inviteCode]);
+        if ($inv->rowCount() === 0) {
             return ['success' => false, 'message' => 'Invalid or expired invite code.'];
         }
+        $invite = $inv->fetch();
 
-        $invite = $inviteStmt->fetch(PDO::FETCH_ASSOC);
-        $role   = $invite['role'];
-
-        // Check uniqueness
+        // Uniqueness check
         $chk = $this->db->prepare(
-            "SELECT id FROM users WHERE username = :username OR email = :email"
+            "SELECT id FROM users WHERE username = :u OR email = :e"
         );
-        $chk->execute([':username' => $username, ':email' => $email]);
+        $chk->execute([':u' => $username, ':e' => $email]);
         if ($chk->rowCount() > 0) {
             return ['success' => false, 'message' => 'Username or email already exists.'];
         }
 
-        // Create user
         $hash = password_hash($password, PASSWORD_DEFAULT);
-        $ins  = $this->db->prepare(
+        $this->db->prepare(
             "INSERT INTO users (username, email, phone, password, role)
-             VALUES (:username, :email, :phone, :password, :role)"
-        );
-        $ins->execute([
-            ':username' => $username,
-            ':email'    => $email,
-            ':phone'    => $phone ?: null,
-            ':password' => $hash,
-            ':role'     => $role,
-        ]);
+             VALUES (:u, :e, :p, :h, :r)"
+        )->execute([':u'=>$username, ':e'=>$email, ':p'=>$phone?:null, ':h'=>$hash, ':r'=>$invite['role']]);
+
         $userId = $this->db->lastInsertId();
 
-        // Mark single-use invites as used; leave group invites open
-        if ($invite['invite_type'] === 'single') {
+        if (($invite['invite_type'] ?? 'single') === 'single') {
             $this->db->prepare(
-                "UPDATE invites SET used_at = NOW(), used_by = :uid WHERE invite_code = :code"
-            )->execute([':uid' => $userId, ':code' => $inviteCode]);
+                "UPDATE invites SET used_at=NOW(), used_by=:uid WHERE invite_code=:code"
+            )->execute([':uid'=>$userId, ':code'=>$inviteCode]);
         }
 
         return ['success' => true, 'message' => 'Account created successfully.'];
     }
 
+    // ── Session helpers ───────────────────────────────────────────────────────
     public function isLoggedIn(): bool {
         return isset($_SESSION['user_id']);
     }
 
-    public function logout(): bool {
+    public function logout(): void {
+        $_SESSION = [];
+        if (ini_get('session.use_cookies')) {
+            $p = session_get_cookie_params();
+            setcookie(session_name(), '', time() - 42000,
+                $p['path'], $p['domain'], $p['secure'], $p['httponly']);
+        }
         session_destroy();
-        return true;
     }
 
+    // ── Re-validate role from DB every request (prevents stale session escalation) ──
     public function getCurrentUser(): ?array {
         if (!$this->isLoggedIn()) return null;
         $stmt = $this->db->prepare(
-            "SELECT id, username, email, phone, role, status, avatar, bio, created_at, last_active
-             FROM users WHERE id = :id"
+            "SELECT id, username, email, phone, role, status, avatar, bio,
+                    avatar_visibility, created_at, last_active
+             FROM users WHERE id = :id AND status != 'banned'"
         );
         $stmt->execute([':id' => $_SESSION['user_id']]);
-        return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+        $user = $stmt->fetch();
+        if (!$user) {
+            // User was banned or deleted — kill session
+            $this->logout();
+            return null;
+        }
+        // Keep session role in sync with DB
+        $_SESSION['role'] = $user['role'];
+        return $user;
     }
 
-    public function hasPermission(string $permission, $channelId = null): bool {
+    // ── Permissions ───────────────────────────────────────────────────────────
+    public function hasPermission(string $permission, ?int $channelId = null): bool {
         if (!$this->isLoggedIn()) return false;
         $role = $_SESSION['role'];
         if ($role === 'admin') return true;
+
         switch ($permission) {
-            case 'create_announcement': return false;
-            case 'moderate_users':      return $role === 'moderator';
-            case 'manage_channels':     return false;
-            case 'send_message':        return in_array($role, ['moderator', 'member']);
-            default:                    return false;
+            case 'moderate_users':  return $role === 'moderator';
+            case 'manage_channels': return $role === 'moderator'; // moderators CAN edit channels
+            case 'send_message':    return in_array($role, ['moderator', 'member']);
+            default:                return false;
         }
+    }
+
+    // ── Anti-escalation: prevent moderators acting on admins/other mods ───────
+    public function canModerate(int $targetUserId): bool {
+        if (!$this->isLoggedIn()) return false;
+        if ($_SESSION['role'] === 'admin') return true;
+        if ($_SESSION['role'] !== 'moderator') return false;
+
+        // Moderators cannot moderate admins or other moderators
+        $stmt = $this->db->prepare("SELECT role FROM users WHERE id = :id");
+        $stmt->execute([':id' => $targetUserId]);
+        $target = $stmt->fetch();
+        return $target && $target['role'] === 'member';
+    }
+
+    // ── CSRF-protected logout ─────────────────────────────────────────────────
+    public static function verifyLogoutToken(string $token): bool {
+        return !empty($_SESSION['logout_token'])
+            && hash_equals($_SESSION['logout_token'], $token);
+    }
+
+    public static function generateLogoutToken(): string {
+        if (empty($_SESSION['logout_token'])) {
+            $_SESSION['logout_token'] = bin2hex(random_bytes(16));
+        }
+        return $_SESSION['logout_token'];
     }
 }

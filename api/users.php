@@ -27,95 +27,109 @@ switch ($method) {
             );
             $stmt->execute([':id' => $profileId]);
             $u = $stmt->fetch(PDO::FETCH_ASSOC);
-            if (!$u) {
-                echo json_encode(['success' => false, 'message' => 'User not found']);
-                exit;
-            }
-            if (empty($u['avatar']) || $u['avatar'] === 'default-avatar.png') {
+            if (!$u) { echo json_encode(['success'=>false,'message'=>'User not found']); exit; }
+            if (empty($u['avatar']) || $u['avatar'] === 'default-avatar.png')
                 $u['avatar'] = 'assets/images/default-avatar.png';
-            }
             echo json_encode(['success' => true, 'user' => $u]);
             exit;
         }
 
         if (isset($_GET['online'])) {
-            // Get online users (active in last 5 minutes)
-            $query = "SELECT id, username, role, avatar, status 
-                     FROM users 
-                     WHERE last_active > DATE_SUB(NOW(), INTERVAL 5 MINUTE) 
-                     AND status != 'banned' 
-                     ORDER BY role, username";
+            $query = "SELECT id, username, role, avatar, status
+                      FROM users
+                      WHERE last_active > DATE_SUB(NOW(), INTERVAL 5 MINUTE)
+                        AND status != 'banned'
+                      ORDER BY role, username";
         } else {
-            // Get all users
-            $query = "SELECT id, username, email, phone, role, status, avatar, created_at, last_active 
-                     FROM users 
-                     ORDER BY role, username";
+            // Only admins/mods see email and phone
+            $isPrivileged = in_array($_SESSION['role'], ['admin', 'moderator']);
+            if ($isPrivileged) {
+                $query = "SELECT id, username, email, phone, role, status, avatar, created_at, last_active
+                          FROM users ORDER BY role, username";
+            } else {
+                $query = "SELECT id, username, role, status, avatar, created_at, last_active
+                          FROM users WHERE status != 'banned' ORDER BY role, username";
+            }
         }
-        
+
         $stmt = $db->prepare($query);
         $stmt->execute();
         $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-        // Fix avatar paths — DB stores bare 'default-avatar.png' for old rows
         foreach ($users as &$u) {
-            if (empty($u['avatar']) || $u['avatar'] === 'default-avatar.png') {
+            if (empty($u['avatar']) || $u['avatar'] === 'default-avatar.png')
                 $u['avatar'] = 'assets/images/default-avatar.png';
-            }
         }
         unset($u);
-
         echo json_encode(['success' => true, 'users' => $users]);
         break;
-        
+
     case 'PUT':
         if (!$auth->hasPermission('moderate_users')) {
             http_response_code(403);
             echo json_encode(['success' => false, 'message' => 'Permission denied']);
             exit;
         }
-        
-        $data = json_decode(file_get_contents('php://input'), true);
-        $userId = $data['user_id'];
-        $action = $data['action'];
-        
-        $allowedActions = ['ban', 'unban', 'mute', 'unmute', 'restrict', 'unrestrict'];
-        if (!in_array($action, $allowedActions)) {
+
+        $data   = json_decode(file_get_contents('php://input'), true);
+        $userId = (int)($data['user_id'] ?? 0);
+        $action = $data['action'] ?? '';
+
+        // Role change — admin only
+        if ($action === 'change_role') {
+            if ($_SESSION['role'] !== 'admin') {
+                http_response_code(403);
+                echo json_encode(['success' => false, 'message' => 'Only admins can change roles']);
+                exit;
+            }
+            if ($userId === (int)$_SESSION['user_id']) {
+                echo json_encode(['success' => false, 'message' => 'You cannot change your own role']);
+                exit;
+            }
+            $newRole = $data['role'] ?? '';
+            if (!in_array($newRole, ['admin', 'moderator', 'member'])) {
+                echo json_encode(['success' => false, 'message' => 'Invalid role']);
+                exit;
+            }
+            $db->prepare("UPDATE users SET role=:role WHERE id=:id")
+               ->execute([':role'=>$newRole, ':id'=>$userId]);
+            echo json_encode(['success' => true, 'message' => 'Role updated to ' . $newRole]);
+            exit;
+        }
+
+        // Anti-escalation — moderators cannot act on admins or other moderators
+        if (!$auth->canModerate($userId)) {
+            http_response_code(403);
+            echo json_encode(['success' => false, 'message' => 'You cannot moderate this user.']);
+            exit;
+        }
+
+        $allowed = ['ban','unban','mute','unmute','restrict','unrestrict'];
+        if (!in_array($action, $allowed)) {
             echo json_encode(['success' => false, 'message' => 'Invalid action']);
             exit;
         }
-        
+
         $statusMap = [
-            'ban' => 'banned',
-            'unban' => 'active',
-            'mute' => 'muted',
-            'unmute' => 'active',
-            'restrict' => 'restricted',
-            'unrestrict' => 'active'
+            'ban'=>'banned','unban'=>'active','mute'=>'muted',
+            'unmute'=>'active','restrict'=>'restricted','unrestrict'=>'active'
         ];
-        
         $newStatus = $statusMap[$action];
-        
-        $updateQuery = "UPDATE users SET status = :status WHERE id = :id";
-        $updateStmt = $db->prepare($updateQuery);
-        $updateStmt->bindParam(':status', $newStatus);
-        $updateStmt->bindParam(':id', $userId);
-        
-        if ($updateStmt->execute()) {
-            echo json_encode(['success' => true, 'message' => ucfirst($action) . ' successful']);
-        } else {
-            echo json_encode(['success' => false, 'message' => 'Failed to ' . $action . ' user']);
-        }
+        $db->prepare("UPDATE users SET status=:status WHERE id=:id")
+           ->execute([':status'=>$newStatus, ':id'=>$userId]);
+        echo json_encode(['success'=>true, 'message'=>ucfirst($action).' successful']);
         break;
 
 
     case 'PATCH':
-        // Avatar upload — sent as multipart form
         if (!isset($_FILES['avatar']) || $_FILES['avatar']['error'] !== 0) {
             echo json_encode(['success' => false, 'message' => 'No avatar file received']);
             exit;
         }
-        $allowed = ['image/jpeg','image/png','image/gif','image/webp'];
-        if (!in_array($_FILES['avatar']['type'], $allowed)) {
+        // Validate by actual file content
+        $finfo    = new finfo(FILEINFO_MIME_TYPE);
+        $realMime = $finfo->file($_FILES['avatar']['tmp_name']);
+        $allowed  = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+        if (!in_array($realMime, $allowed)) {
             echo json_encode(['success' => false, 'message' => 'Only JPG, PNG, GIF, WEBP allowed']);
             exit;
         }
@@ -123,14 +137,16 @@ switch ($method) {
             echo json_encode(['success' => false, 'message' => 'Avatar must be under 2MB']);
             exit;
         }
-        $ext      = pathinfo($_FILES['avatar']['name'], PATHINFO_EXTENSION);
-        $fileName = 'avatar_' . $_SESSION['user_id'] . '_' . time() . '.' . $ext;
+        // Map real MIME to extension — never trust original filename
+        $extMap   = ['image/jpeg'=>'jpg','image/png'=>'png','image/gif'=>'gif','image/webp'=>'webp'];
+        $ext      = $extMap[$realMime];
+        $fileName = 'avatar_' . $_SESSION['user_id'] . '_' . bin2hex(random_bytes(8)) . '.' . $ext;
         $uploadDir = __DIR__ . '/../uploads/avatars/';
-        if (!file_exists($uploadDir)) mkdir($uploadDir, 0777, true);
+        if (!file_exists($uploadDir)) mkdir($uploadDir, 0755, true);
         if (move_uploaded_file($_FILES['avatar']['tmp_name'], $uploadDir . $fileName)) {
             $avatarPath = 'uploads/avatars/' . $fileName;
-            $upd = $db->prepare('UPDATE users SET avatar = :avatar WHERE id = :id');
-            $upd->execute([':avatar' => $avatarPath, ':id' => $_SESSION['user_id']]);
+            $db->prepare('UPDATE users SET avatar=:avatar WHERE id=:id')
+               ->execute([':avatar'=>$avatarPath, ':id'=>$_SESSION['user_id']]);
             echo json_encode(['success' => true, 'avatar' => $avatarPath]);
         } else {
             echo json_encode(['success' => false, 'message' => 'Failed to save avatar']);

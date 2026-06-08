@@ -122,10 +122,33 @@ switch ($method) {
         }
 
         // ── Normal message load ───────────────────────────────────────────────
-        $channelId = $_GET['channel_id'] ?? null;
+        $channelId = (int)($_GET['channel_id'] ?? 0);
         if (!$channelId) {
             echo json_encode(['success' => false, 'message' => 'Channel ID required']);
             exit;
+        }
+
+        // Verify user has access to this channel
+        $chanAccess = $db->prepare(
+            "SELECT type FROM channels WHERE id = :id"
+        );
+        $chanAccess->execute([':id' => $channelId]);
+        $chanRow = $chanAccess->fetch(PDO::FETCH_ASSOC);
+        if (!$chanRow) {
+            echo json_encode(['success' => false, 'message' => 'Channel not found']);
+            exit;
+        }
+        // For team channels, verify membership (admins/mods bypass)
+        if ($chanRow['type'] === 'team' && !in_array($_SESSION['role'], ['admin', 'moderator'])) {
+            $memCheck = $db->prepare(
+                "SELECT id FROM team_members WHERE channel_id = :cid AND user_id = :uid"
+            );
+            $memCheck->execute([':cid' => $channelId, ':uid' => $_SESSION['user_id']]);
+            if (!$memCheck->fetch()) {
+                http_response_code(403);
+                echo json_encode(['success' => false, 'message' => 'Access denied']);
+                exit;
+            }
         }
 
         // Clear unread counter when user opens the channel
@@ -184,12 +207,45 @@ switch ($method) {
         $fileType = null;
 
         if (isset($_FILES['file']) && $_FILES['file']['error'] == 0) {
-            $uploadDir = '../uploads/';
-            if (!file_exists($uploadDir)) mkdir($uploadDir, 0777, true);
+            $uploadDir = __DIR__ . '/../uploads/';
+            if (!file_exists($uploadDir)) mkdir($uploadDir, 0755, true);
 
-            $fileName = time() . '_' . basename($_FILES['file']['name']);
+            // Validate by actual file content, not browser-provided type
+            $finfo    = new finfo(FILEINFO_MIME_TYPE);
+            $realMime = $finfo->file($_FILES['file']['tmp_name']);
+            $allowed  = [
+                'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+                'video/mp4', 'video/webm',
+                'audio/mpeg', 'audio/ogg', 'audio/wav',
+                'application/pdf',
+                'text/plain',
+                'application/msword',
+                'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            ];
+            if (!in_array($realMime, $allowed)) {
+                echo json_encode(['success' => false, 'message' => 'File type not allowed.']);
+                exit;
+            }
+
+            // Block dangerous extensions regardless of MIME
+            $ext = strtolower(pathinfo($_FILES['file']['name'], PATHINFO_EXTENSION));
+            $blockedExts = ['php', 'php3', 'php4', 'php5', 'phtml', 'phar',
+                            'exe', 'sh', 'bat', 'cmd', 'js', 'html', 'htm', 'svg'];
+            if (in_array($ext, $blockedExts)) {
+                echo json_encode(['success' => false, 'message' => 'File type not allowed.']);
+                exit;
+            }
+
+            // Max 10MB
+            if ($_FILES['file']['size'] > 10 * 1024 * 1024) {
+                echo json_encode(['success' => false, 'message' => 'File must be under 10MB.']);
+                exit;
+            }
+
+            // Randomise filename — never use original name on disk
+            $fileName = bin2hex(random_bytes(16)) . '.' . $ext;
             $dest     = $uploadDir . $fileName;
-            $fileType = $_FILES['file']['type'];
+            $fileType = $realMime;
 
             if (move_uploaded_file($_FILES['file']['tmp_name'], $dest)) {
                 $filePath = 'uploads/' . $fileName;

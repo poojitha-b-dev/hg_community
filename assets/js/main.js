@@ -32,6 +32,7 @@ class CommunityApp {
         this.startAutoRefresh();
         this.startPresencePolling();
         this.startUnreadPolling();
+        this.loadCommunitySettings(); // load community identity on startup
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -62,9 +63,9 @@ class CommunityApp {
         // Logout
         document.getElementById('logout-btn').addEventListener('click', () => {
             if (confirm('Are you sure you want to logout?')) {
-                // Tell presence we're going offline
+                const token = document.getElementById('logout-btn').dataset.token || '';
                 navigator.sendBeacon('api/presence.php', JSON.stringify({ offline: true }));
-                window.location.href = 'api/auth.php?action=logout';
+                window.location.href = 'api/auth.php?action=logout&token=' + encodeURIComponent(token);
             }
         });
 
@@ -101,6 +102,34 @@ class CommunityApp {
                 const open = adminControls.style.display !== 'none';
                 adminControls.style.display = open ? 'none' : 'block';
                 adminToggle.querySelector('.admin-toggle-icon').textContent = open ? '▲' : '▼';
+            });
+        }
+
+        // Community settings (admin only)
+        const commSettingsBtn = document.getElementById('community-settings-btn');
+        if (commSettingsBtn) {
+            commSettingsBtn.addEventListener('click', () => {
+                document.getElementById('community-settings-modal').style.display = 'block';
+                this.loadCommunitySettings();
+            });
+        }
+        const commForm = document.getElementById('community-settings-form');
+        if (commForm) commForm.addEventListener('submit', (e) => this.saveCommunitySettings(e));
+
+        const logoUpload = document.getElementById('logo-upload');
+        if (logoUpload) logoUpload.addEventListener('change', (e) => {
+            if (e.target.files[0]) this.uploadCommunityImage(e.target.files[0], 'logo');
+        });
+        const bannerUpload = document.getElementById('banner-upload');
+        if (bannerUpload) bannerUpload.addEventListener('change', (e) => {
+            if (e.target.files[0]) this.uploadCommunityImage(e.target.files[0], 'banner');
+        });
+
+        // Channel info button
+        const chanInfoBtn = document.getElementById('channel-info-btn');
+        if (chanInfoBtn) {
+            chanInfoBtn.addEventListener('click', () => {
+                if (this.currentChannelId) this.openChannelInfo(this.currentChannelId);
             });
         }
 
@@ -336,6 +365,10 @@ class CommunityApp {
         this.messages         = [];
         this.startTypingSSE(channelId);
         this.loadMessages();
+
+        // Show info button
+        const infoBtn = document.getElementById('channel-info-btn');
+        if (infoBtn) infoBtn.style.display = 'inline-flex';
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -1259,6 +1292,178 @@ class CommunityApp {
     // User Management (Admin)
     // ══════════════════════════════════════════════════════════════════════════
 
+    async changeUserRole(userId, newRole) {
+        if (!confirm(`Change this user's role to ${newRole}?`)) {
+            this.loadAllUsers(); // reset the select
+            return;
+        }
+        try {
+            const res  = await fetch('api/users.php', {
+                method: 'PUT', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ user_id: userId, action: 'change_role', role: newRole }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.showNotification('Role updated to ' + newRole, 'success');
+                this.loadAllUsers();
+            } else {
+                this.showNotification(data.message, 'error');
+                this.loadAllUsers();
+            }
+        } catch (e) { this.showNotification('Error changing role', 'error'); }
+    }
+
+    async loadCommunitySettings() {
+        try {
+            const res  = await fetch('api/community.php');
+            const data = await res.json();
+            if (!data.success) return;
+
+            const s = data.settings;
+            const stats = data.stats;
+
+            // Update header
+            const nameEl = document.getElementById('server-name');
+            if (nameEl) nameEl.textContent = s.name || 'HG Community';
+
+            const taglineEl = document.getElementById('server-tagline');
+            if (taglineEl) taglineEl.textContent = s.tagline || '';
+
+            if (s.logo) {
+                const img = document.getElementById('server-logo-img');
+                if (img) img.src = s.logo;
+            }
+
+            if (s.banner) {
+                const banner = document.getElementById('server-banner');
+                const img    = document.getElementById('server-banner-img');
+                if (banner) banner.style.display = 'block';
+                if (img)    img.src = s.banner;
+            }
+
+            // Update title
+            document.title = (s.name || 'HG Community');
+
+            // Pre-fill community settings modal
+            const nameInput = document.getElementById('community-name');
+            if (nameInput) nameInput.value = s.name || '';
+            const tagInput = document.getElementById('community-tagline');
+            if (tagInput) tagInput.value = s.tagline || '';
+            const descInput = document.getElementById('community-description');
+            if (descInput) descInput.value = s.description || '';
+
+            if (s.logo) {
+                const prev = document.getElementById('community-logo-preview');
+                if (prev) prev.src = s.logo;
+            }
+            if (s.banner) {
+                const img = document.getElementById('community-banner-img');
+                if (img) { img.src = s.banner; img.style.display = 'block'; }
+            }
+
+            // Stats
+            if (stats) {
+                const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val.toLocaleString(); };
+                set('stat-members',  stats.member_count);
+                set('stat-channels', stats.channel_count);
+                set('stat-teams',    stats.team_count);
+                set('stat-messages', stats.message_count);
+            }
+        } catch (e) { console.error('Community settings load error', e); }
+    }
+
+    async saveCommunitySettings(e) {
+        e.preventDefault();
+        const name        = document.getElementById('community-name').value.trim();
+        const tagline     = document.getElementById('community-tagline').value.trim();
+        const description = document.getElementById('community-description').value.trim();
+
+        if (!name) { this.showNotification('Community name required', 'error'); return; }
+
+        try {
+            const res  = await fetch('api/community.php', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ name, tagline, description }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                this.showNotification('Settings saved!', 'success');
+                this.loadCommunitySettings();
+            } else {
+                this.showNotification(data.message, 'error');
+            }
+        } catch (e) { this.showNotification('Error saving settings', 'error'); }
+    }
+
+    async uploadCommunityImage(file, type) {
+        const formData = new FormData();
+        formData.append(type, file);
+        try {
+            const res  = await fetch(`api/community.php?type=${type}`, { method: 'PATCH', body: formData });
+            const data = await res.json();
+            if (data.success) {
+                this.showNotification(`${type} updated!`, 'success');
+                this.loadCommunitySettings();
+            } else {
+                this.showNotification(data.message, 'error');
+            }
+        } catch (e) { this.showNotification('Error uploading image', 'error'); }
+    }
+
+    async openChannelInfo(channelId) {
+        const panel = document.getElementById('channel-info-panel');
+        if (!panel) return;
+        panel.style.display = 'block';
+
+        try {
+            const res  = await fetch(`api/channels.php?info=${channelId}`);
+            const data = await res.json();
+            if (!data.success) return;
+
+            const ch = data.channel;
+            const typeLabels = { announcement:'📢 Announcement', general:'💬 General', team:'👥 Team', technical:'💻 Technical' };
+
+            document.getElementById('channel-info-name').textContent = '#' + ch.name;
+            document.getElementById('channel-info-type').innerHTML =
+                `<span class="role-badge" style="background:#383a40">${typeLabels[ch.type]||ch.type}</span>`;
+            document.getElementById('channel-info-desc').textContent = ch.description || 'No description set.';
+            document.getElementById('channel-info-stats').innerHTML = `
+                <div class="stat-item"><span>${ch.message_count}</span><label>Messages</label></div>
+                <div class="stat-item"><span>${ch.file_count}</span><label>Files</label></div>`;
+
+            // Team members
+            const memSection = document.getElementById('channel-info-members-section');
+            const memList    = document.getElementById('channel-info-members');
+            if (data.members && data.members.length) {
+                memSection.style.display = 'block';
+                memList.innerHTML = data.members.map(m => `
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+                        <img src="${m.avatar||'assets/images/default-avatar.png'}"
+                             onerror="this.src='assets/images/default-avatar.png'"
+                             style="width:28px;height:28px;border-radius:50%;object-fit:cover">
+                        <span style="color:#dcddde;font-size:.85rem">${this.escapeHtml(m.username)}</span>
+                        <span class="role-badge role-${m.role}" style="margin-left:auto;font-size:.7rem">${m.role}</span>
+                    </div>`).join('');
+            } else {
+                memSection.style.display = 'none';
+            }
+
+            // Pinned messages
+            const pinSection = document.getElementById('channel-info-pinned-section');
+            const pinList    = document.getElementById('channel-info-pinned');
+            if (data.pinned && data.pinned.length) {
+                pinSection.style.display = 'block';
+                pinList.innerHTML = data.pinned.map(p => `
+                    <div style="background:#383a40;border-radius:6px;padding:8px;margin-bottom:6px;font-size:.82rem">
+                        <div style="color:#949ba4;font-size:.72rem;margin-bottom:3px">${this.escapeHtml(p.username)}</div>
+                        <div style="color:#dcddde">${this.escapeHtml(p.content.substring(0,100))}${p.content.length>100?'…':''}</div>
+                    </div>`).join('');
+            } else {
+                pinSection.style.display = 'none';
+            }
+        } catch (e) { console.error('Channel info error', e); }
+    }
+
     async loadAllUsers() {
         try {
             const response = await fetch('api/users.php');
@@ -1422,10 +1627,20 @@ class CommunityApp {
             let actions;
             if (isSelf) {
                 actions = '<span style="color:#949ba4;font-size:.8rem">You</span>';
-            } else if (isAdmin) {
+            } else if (isAdmin && currentUser.role !== 'admin') {
                 actions = '<span style="color:#949ba4;font-size:.8rem">Admin — cannot be moderated</span>';
             } else {
-                actions = `<div style="display:flex;gap:5px;flex-wrap:wrap;">
+                const roleSelect = currentUser.role === 'admin' ? `
+                    <select onchange="app.changeUserRole(${user.id},this.value)"
+                            style="background:#383a40;border:1px solid #4f545c;color:#fff;
+                                   border-radius:4px;padding:4px 6px;font-size:.78rem;cursor:pointer">
+                        <option value="member"    ${user.role==='member'    ?'selected':''}>Member</option>
+                        <option value="moderator" ${user.role==='moderator' ?'selected':''}>Moderator</option>
+                        <option value="admin"     ${user.role==='admin'     ?'selected':''}>Admin</option>
+                    </select>` : '';
+
+                actions = `<div style="display:flex;gap:5px;flex-wrap:wrap;align-items:center">
+                    ${roleSelect}
                     ${user.status === 'muted'
                         ? `<button onclick="app.moderateUser(${user.id},'unmute')"  class="mod-btn" style="background:#23a559" title="Restore ability to send messages">Unmute</button>`
                         : `<button onclick="app.moderateUser(${user.id},'mute')"    class="mod-btn" style="background:#f0b232;color:#1a1a1a" title="Prevent user from sending any messages">Mute</button>`}
